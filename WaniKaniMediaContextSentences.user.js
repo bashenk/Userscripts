@@ -60,6 +60,7 @@
             // Mapping of the content title to the enabled state. All content is enabled by default.
             // Titles taken from https://www.immersionkit.com/information and modified after testing a few example search results.
             filterAnimeShows: {
+                'Alya Sometimes Hides Her Feelings in Russian': true,
                 'Angel Beats!': true,
                 'Anohana the flower we saw that day': true,
                 'Assassination Classroom Season 1': true,
