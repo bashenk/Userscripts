@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name        Wanikani Ultimate Timeline
-// @namespace   rfindley
+// @namespace   https://greasyfork.org/en/users/11878
 // @description Review schedule explorer for WaniKani
 // @version     8.0.4
 // @match       https://www.wanikani.com/*
 // @match       https://preview.wanikani.com/*
 // @copyright   2018-2023, Robin Findley
+// @copyright   2025, Brian Shenk
 // @license     MIT; http://opensource.org/licenses/MIT
 // @run-at      document-body
 // @grant       none
