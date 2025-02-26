@@ -19,7 +19,7 @@
 /* global wkof, wkItemInfo */
 (() => {
     'use strict';
-    const wkof = window.wkof, oldScriptId = 'anime-sentences-2', scriptName = "Media Context Sentences", scriptId = scriptName.toLowerCase().replaceAll(' ', '-'), styleSheetName = `${scriptId}-style`;
+    const wkof = window.wkof, oldScriptId = 'anime-sentences-2', scriptName = "Media Context Sentences", scriptId = 'media-context-sentences', styleSheetName = `${scriptId}-style`;
     const state = {
         settings: {
             // The maximum height of the container box. If no unit type is provided, px (pixels) is automatically appended.
