@@ -826,12 +826,13 @@ window.timeline = {};
                 case '5': inc_s *= 2; inc_l *= 5; break;
             }
         }
+        graph.y_axis.max_reviews = Math.max(3, Math.ceil(max_reviews / inc_s) * inc_s);
 
         //=================================
         // Ensure margin allows room for labels
         // Note: increasing the y value requires increasing graph.margin.top to compensate, or else the text will be partially clipped
         let label_x_padding = {x: 4, y: 8};
-        graph.margin.left = (max_reviews.toString().length * 10) - 2; // Extra space for label_y labels
+        graph.margin.left = (graph.y_axis.max_reviews.toString().length * 10) - 2; // Extra space for label_y labels
 
         const graph_height = panel_height - (graph.margin.top + graph.margin.bottom),
             graph_width = panel_width - graph.margin.left;
@@ -840,9 +841,8 @@ window.timeline = {};
         graph.y_axis.height = graph_height;
 
         // Draw vertical graph tics (# of Reviews).
-        var tic_class, y;
-        graph.y_axis.max_reviews = Math.max(3, Math.ceil(max_reviews / inc_s) * inc_s);
-        for (var tic = 0; tic <= graph.y_axis.max_reviews; tic += inc_s) {
+        let tic_class, y;
+        for (let tic = 0; tic <= graph.y_axis.max_reviews; tic += inc_s) {
             tic_class = ((tic % inc_l) === 0 ? 'major' : 'minor');
             y = (graph.margin.top + graph_height) - Math.round(graph_height * (tic / graph.y_axis.max_reviews));
             if (tic > 0) {
