@@ -2,7 +2,7 @@
 // @name        Wanikani Ultimate Timeline
 // @namespace   rfindley
 // @description Review schedule explorer for WaniKani
-// @version     8.0.3
+// @version     8.0.4
 // @match       https://www.wanikani.com/*
 // @match       https://preview.wanikani.com/*
 // @copyright   2018-2023, Robin Findley
