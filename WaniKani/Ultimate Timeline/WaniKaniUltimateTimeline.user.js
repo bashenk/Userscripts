@@ -7,7 +7,7 @@
 // @match       https://preview.wanikani.com/*
 // @copyright   2018-2023, Robin Findley
 // @license     MIT; http://opensource.org/licenses/MIT
-// @run-at      document-end
+// @run-at      document-body
 // @grant       none
 // ==/UserScript==
 
