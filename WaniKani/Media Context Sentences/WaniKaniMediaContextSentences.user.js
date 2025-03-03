@@ -8,7 +8,7 @@
 // @match        https://preview.wanikani.com/*
 // @require      https://greasyfork.org/scripts/430565-wanikani-item-info-injector/code/WaniKani%20Item%20Info%20Injector.user.js?version=1416982
 // @copyright    2021+, Paul Connolly
-// @copyright    2024, Brian Shenk
+// @copyright    2024-2025, Brian Shenk
 // @license      MIT; http://opensource.org/licenses/MIT
 // @run-at       document-body
 // @grant        none
