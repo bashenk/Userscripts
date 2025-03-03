@@ -13,13 +13,12 @@
 // @run-at       document-body
 // @grant        none
 // ==/UserScript==
-// Original script by psdcon
 /* jshint esversion: 11 */
 // noinspection CssUnusedSymbol,CssInvalidPropertyValue,CssUnresolvedCustomProperty,JSUnusedGlobalSymbols,JSNonASCIINames
 /* global wkof, wkItemInfo */
 (() => {
     'use strict';
-    const wkof = window.wkof, oldScriptId = 'anime-sentences-2', scriptName = "Media Context Sentences", scriptId = 'media-context-sentences', styleSheetName = `${scriptId}-style`;
+    const wkof = window.wkof, oldScriptId = 'anime-sentences-2', scriptName = 'Media Context Sentences', scriptId = 'media-context-sentences', styleSheetName = `${scriptId}-style`;
     const state = {
         settings: {
             // The maximum height of the container box. If no unit type is provided, px (pixels) is automatically appended.
@@ -161,15 +160,15 @@
         const deckIndex = await fetchImmersionKitDeckIndex();
         await mergeImmersionKitDeckDataIntoContent(deckIndex);
         if (window.wkof) {
-            await wkof.include("Apiv2,Settings,Menu"); // Apiv2 needed in order to set wkof.user.level
+            await wkof.include('Apiv2,Settings,Menu'); // Apiv2 needed in order to set wkof.user.level
             // document.documentElement.addEventListener('turbo:load', () => setTimeout(() => wkof.ready('Menu').then(installMenu), 0));
-            await wkof.ready("Settings");
+            await wkof.ready('Settings');
             // await createContentListsForSettings();
             await migrateOldSettingsLocation();
             let settings = await loadSettings();
             settings = await migrateOldSettings(settings);
             await mergeSettings(settings);
-            await Promise.all([wkof.ready("Apiv2"), addStyle()]);
+            await Promise.all([wkof.ready('Apiv2'), addStyle()]);
             await restoreCachedImmersionKitData();
             await updateDesiredShows();
             wkof.on_pageload(matchAnyUrlRegex, () => wkof.ready('Menu').then(installMenu));
@@ -183,7 +182,7 @@
     function setWaniKaniItemInfoListener() {
         if (state.wkItemInfoHandler) // TODO: Consider using two handlers to avoid removing removing the entire handler just for Kanji settings changes
             state.wkItemInfoHandler.remove();
-        state.wkItemInfoHandler = wkItemInfo.forType(`${state.settings.showOnKanji ? 'kanji,' : ''}vocabulary,kanaVocabulary`).under(`examples`).notify(onExamplesVisible);
+        state.wkItemInfoHandler = wkItemInfo.forType(`${state.settings.showOnKanji ? 'kanji,' : ''}vocabulary,kanaVocabulary`).under('examples').notify(onExamplesVisible);
     }
 
     // ---------------------------------------------------------------------------------------------------------------- //
@@ -191,18 +190,18 @@
     // ---------------------------------------------------------------------------------------------------------------- //
 
     async function addContextSentences() {
-        state.baseEl = Object.assign(document.createElement("div"), {id: `${scriptId}-container`});
-        state.sentencesEl = Object.assign(document.createElement("div"), {
+        state.baseEl = Object.assign(document.createElement('div'), {id: `${scriptId}-container`});
+        state.sentencesEl = Object.assign(document.createElement('div'), {
             id: `${scriptId}`,
             textContent: 'Loading...'
         });
 
-        const titleEl = Object.assign(document.createElement("span"), {textContent: scriptName});
+        const titleEl = Object.assign(document.createElement('span'), {textContent: scriptName});
         const header = [], additionalSettings = {sectionName: scriptName, under: 'examples'};
         header.push(titleEl);
 
         if (wkof) {
-            const settingsBtn = Object.assign(document.createElement("span"), {
+            const settingsBtn = Object.assign(document.createElement('span'), {
                 textContent: '⚙️',
                 className: `${scriptId}-settings-btn`,
                 onclick: openSettings
@@ -449,7 +448,7 @@
         if (data === null)
             return state.sentencesEl.textContent = 'Error fetching examples from Immersion Kit.';
         if (data.examples.length === 0)
-            return state.sentencesEl.textContent = `${state.settings.fetchRetryCount > 0 ? "Retry limit reached. " : ''}No sentences found.`;
+            return state.sentencesEl.textContent = `${state.settings.fetchRetryCount > 0 ? 'Retry limit reached. ' : ''}No sentences found.`;
         state.sentencesEl.textContent = 'Loading...';
         if (state.settings.debugging)
             state.debugList = new Set();
@@ -494,8 +493,8 @@
             sentencesToDisplay.push(example);
         }
         if (sentencesToDisplay.length === 0 || state.settings.debugging && state.debugList.size > 0) {
-            const deckCountsAsJson = JSON.stringify(data.deck_count, undefined, "\t");
-            const preElement = Object.assign(document.createElement("pre"), {
+            const deckCountsAsJson = JSON.stringify(data.deck_count, undefined, '\t');
+            const preElement = Object.assign(document.createElement('pre'), {
                 innerText: `${sentencesToDisplay.length>0 ? sentencesToDisplay.length : 'No'} sentences found for your selected filters (${data.examples.length-sentencesToDisplay.length} are available but hidden; see below for details and entry counts)<br>${deckCountsAsJson}`
             });
             if (state.settings.debugging)
@@ -515,35 +514,35 @@
     }
 
     async function createExampleElement(example) {
-        const parentEl = Object.assign(document.createElement("div"), {className: 'example'}),
-            imgEl = Object.assign(document.createElement("img"), {
-                src: example.image_url ?? "",
-                decoding: "auto",
+        const parentEl = Object.assign(document.createElement('div'), {className: 'example'}),
+            imgEl = Object.assign(document.createElement('img'), {
+                src: example.image_url ?? '',
+                decoding: 'auto',
                 alt: ''
             }),
-            textParentEl = Object.assign(document.createElement("div"), {className: 'example-text'}),
-            textTitleEl = Object.assign(document.createElement("div"), {
+            textParentEl = Object.assign(document.createElement('div'), {className: 'example-text'}),
+            textTitleEl = Object.assign(document.createElement('div'), {
                 className: 'title',
                 title: example.id, // TODO: Consider removing/moving elsewhere
                 textContent: state.content.allContent.get(example.title).name
             }),
-            audioButtonEl = Object.assign(document.createElement("button"), {
+            audioButtonEl = Object.assign(document.createElement('button'), {
                 type: 'button',
                 className: 'audio-btn audio-idle',
                 title: 'Play Audio',
                 textContent: '🔈'
             }),
-            jaEl = Object.assign(document.createElement("div"), {className: 'ja'}),
-            jaSpanEl = Object.assign(document.createElement("span"), {
+            jaEl = Object.assign(document.createElement('div'), {className: 'ja'}),
+            jaSpanEl = Object.assign(document.createElement('span'), {
                 className: 'base',
                 innerHTML: example.furiganaObject.getExpressionHtml()
             }),
-            jaFuriganaSpanEl = Object.assign(document.createElement("span"), {
+            jaFuriganaSpanEl = Object.assign(document.createElement('span'), {
                 className: 'furigana',
                 innerHTML: example.furiganaObject.getFuriganaHtml()
             }),
-            enEl = Object.assign(document.createElement("div"), {className: 'en'}),
-            enSpanEl = Object.assign(document.createElement("span"), {textContent: example.translation}),
+            enEl = Object.assign(document.createElement('div'), {className: 'en'}),
+            enSpanEl = Object.assign(document.createElement('span'), {textContent: example.translation}),
             elements = [
                 {element: jaSpanEl,
                     classListUpdates: [{name: 'showJapanese', value: state.settings.showJapanese}, {name: 'showFurigana', value: state.settings.showFurigana}],
@@ -587,7 +586,7 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    function normalize(str){return str.normalize("NFD").replace(/[\u0300-\u036f]/g, '').replaceAll('×','x').replace(/[^a-z0-9]/gi,'_');} // .replace(/[\s,“”"`'.?!;:()[\]{}\-−/+*=&]/g, '_');}
+    function normalize(str){return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replaceAll('×','x').replace(/[^a-z0-9]/gi,'_');} // .replace(/[\s,“”"`'.?!;:()[\]{}\-−/+*=&]/g, '_');}
 
     function isEmptyObject(value) {
         if (value == null) {
@@ -720,25 +719,25 @@
 
     function configureAudioElement(element, example) {
         let audioContainer;
-        const idleClassName = "audio-idle",
-            playingClassName = "audio-play",
+        const idleClassName = 'audio-idle',
+            playingClassName = 'audio-play',
             onPlay = () => {
                 element.classList.replace(idleClassName, playingClassName);
                 element.textContent = '🔊';
             }, onStop = () => {
                 element.classList.replace(playingClassName, idleClassName);
                 element.textContent = '🔈';
-                removeAudioElement(audioContainer || state.baseEl.querySelector("audio"));
+                removeAudioElement(audioContainer || state.baseEl.querySelector('audio'));
             };
         element.onclick = function(e) {
             e.stopPropagation(); // prevent this click from triggering twice in some scenarios
-            if ((audioContainer = state.baseEl.querySelector("audio")) !== null) {
+            if ((audioContainer = state.baseEl.querySelector('audio')) !== null) {
                 const prevSource = audioContainer.src;
                 audioContainer.pause();
                 if (prevSource === example.sound_url)
                     return;
             }
-            audioContainer = Object.assign(document.createElement("audio"), {
+            audioContainer = Object.assign(document.createElement('audio'), {
                 src: example.sound_url,
                 playbackRate: state.settings.playbackRate * 2 / 100,
                 volume: state.settings.playbackVolume / 100,
@@ -755,7 +754,7 @@
     function removeAudioElement(element) {
         if (element === undefined || element === null)
             return;
-        element.src = "";
+        element.src = '';
         element.remove();
     }
 
@@ -856,9 +855,9 @@
 
     async function migrateOldSettings(settings) {
         let changed;
-        // update legacy maxBoxHeight from a simple number to a text value to allow specifying the exact measurement unit (e.g., if something other than "px" is desired)
+        // update legacy maxBoxHeight from a simple number to a text value to allow specifying the exact measurement unit (e.g., if something other than 'px' is desired)
         if (!Number.isNaN(Number(settings.maxBoxHeight))) changed = wkof.settings[scriptId].maxBoxHeight = `${settings.maxBoxHeight}px`;
-        // update legacy sentenceSorting values from "none" to "source"
+        // update legacy sentenceSorting values from 'none' to 'source'
         if (settings.sentenceSorting === 'none') changed = wkof.settings[scriptId].sentenceSorting = 'source';
         // update legacy playbackRate settings from a decimal value to a raw percentage out of 200
         if (settings.playbackRate <= 2) changed = wkof.settings[scriptId].playbackRate = settings.playbackRate * 50;
@@ -1014,16 +1013,16 @@
 
     function openSettings(e) {
         e.stopPropagation();
-        const showTextOptions = {always: "Always", onhover: "On Hover", onclick: "On Click"},
-            showFuriganaOptions = {always: "Always", onhover: "On Hover", never: "Never"},
-            jlptOptions = {0: "No Filter", 1: "N1", 2: "N2", 3: "N3", 4: "N4", 5: "N5"},
+        const showTextOptions = {always: 'Always', onhover: 'On Hover', onclick: 'On Click'},
+            showFuriganaOptions = {always: 'Always', onhover: 'On Hover', never: 'Never'},
+            jlptOptions = {0: 'No Filter', 1: 'N1', 2: 'N2', 3: 'N3', 4: 'N4', 5: 'N5'},
             sortingMethods = {
-                default: "Default",
-                category: "Category (anime, drama, etc.)",
-                source: "Source Title",
-                shortness: "Shortest sentences first",
-                longness: "Longest sentences first",
-                position: "Position of keyword in sentence",
+                default: 'Default',
+                category: 'Category (anime, drama, etc.)',
+                source: 'Source Title',
+                shortness: 'Shortest sentences first',
+                longness: 'Longest sentences first',
+                position: 'Position of keyword in sentence',
             };
 
         function getMissingSortingMethods(currentSecondarySortingOptions) {
@@ -1083,59 +1082,59 @@
             script_id: scriptId, title: scriptName, on_save: onSettingsSaved, on_close: onSettingsClosed,
             content: {
                 general: {
-                    type: "page", label: "General", content: {
+                    type: 'page', label: 'General', content: {
                         generalDescription: {
                             type: 'section', label: 'Changes to settings in this tab can be previewed in real-time.'
                         }, appearanceOptions: {
-                            type: "group", label: "Appearance Options", content: {
+                            type: 'group', label: 'Appearance Options', content: {
                                 showOnKanji: {
-                                    type: "checkbox", label: "Show on Kanji Items", default: state.settings.showOnKanji,
-                                    hover_tip: "Allows the box to appear in the Examples tab for kanji in addition to vocabulary.",
+                                    type: 'checkbox', label: 'Show on Kanji Items', default: state.settings.showOnKanji,
+                                    hover_tip: 'Allows the box to appear in the Examples tab for kanji in addition to vocabulary.',
                                     on_change: onShowOnKanjiOptionChanged
                                 }, maxBoxHeight: {
-                                    type: "text", label: "Box Height", step: 1, min: 0, default: state.settings.maxBoxHeight,
-                                    hover_tip: "Set the maximum height of the container box.\nIf no unit type is provided, px (pixels) is automatically appended.",
+                                    type: 'text', label: 'Box Height', step: 1, min: 0, default: state.settings.maxBoxHeight,
+                                    hover_tip: 'Set the maximum height of the container box.\nIf no unit type is provided, px (pixels) is automatically appended.',
                                     on_change: onMaxBoxHeightOptionChanged, validate: validateMaxHeight
                                 }, exampleLimit: {
-                                    type: "number", label: "Example Limit", step: 1, min: 0, default: state.settings.exampleLimit,
-                                    hover_tip: "Limit the number of entries that may appear.\nSet to 0 to show as many as possible (note that this can really lag the list generation when there are a very large number of matches).",
+                                    type: 'number', label: 'Example Limit', step: 1, min: 0, default: state.settings.exampleLimit,
+                                    hover_tip: 'Limit the number of entries that may appear.\nSet to 0 to show as many as possible (note that this can really lag the list generation when there are a very large number of matches).',
                                     on_change: onExampleLimitOptionChanged
                                 }, showJapanese: {
-                                    type: "dropdown", label: "Show Japanese", default: state.settings.showJapanese, content: showTextOptions,
-                                    hover_tip: "When to show Japanese text.\nHover enables transcribing a sentences first (play audio by clicking the image to avoid seeing the answer).",
+                                    type: 'dropdown', label: 'Show Japanese', default: state.settings.showJapanese, content: showTextOptions,
+                                    hover_tip: 'When to show Japanese text.\nHover enables transcribing a sentences first (play audio by clicking the image to avoid seeing the answer).',
                                     on_change: onTextShowOptionChanged
                                 }, showFurigana: {
-                                    type: "dropdown", label: "Show Furigana", default: state.settings.showFurigana, content: showFuriganaOptions,
-                                    hover_tip: "These have been autogenerated so there may be mistakes.",
+                                    type: 'dropdown', label: 'Show Furigana', default: state.settings.showFurigana, content: showFuriganaOptions,
+                                    hover_tip: 'These have been autogenerated so there may be mistakes.',
                                     on_change: onTextShowOptionChanged
                                 }, showEnglish: {
-                                    type: "dropdown", label: "Show English", default: state.settings.showEnglish, content: showTextOptions,
-                                    hover_tip: "Hover or click allows testing your understanding before seeing the answer.",
+                                    type: 'dropdown', label: 'Show English', default: state.settings.showEnglish, content: showTextOptions,
+                                    hover_tip: 'Hover or click allows testing your understanding before seeing the answer.',
                                     on_change: onTextShowOptionChanged
                                 }
                             }
                         }, playbackOptions: {
-                            type: "group", label: "Playback Options", content: {
+                            type: 'group', label: 'Playback Options', content: {
                                 playbackRate: {
-                                    type: "input", subtype: "range", label: "Playback Speed", default: state.settings.playbackRate,
-                                    hover_tip: "Speed to play back audio. (10% - 200%)",
+                                    type: 'input', subtype: 'range', label: 'Playback Speed', default: state.settings.playbackRate,
+                                    hover_tip: 'Speed to play back audio. (10% - 200%)',
                                     on_change: onAudioPlaybackOptionChanged, validate: validatePlaybackRate
                                 }, playbackVolume: {
-                                    type: "input", subtype: "range", label: "Playback Volume", default: state.settings.playbackVolume,
-                                    hover_tip: "Volume to play back audio. (0% - 100%)",
+                                    type: 'input', subtype: 'range', label: 'Playback Volume', default: state.settings.playbackVolume,
+                                    hover_tip: 'Volume to play back audio. (0% - 100%)',
                                     on_change: onAudioPlaybackOptionChanged, validate: validatePlaybackVolume
                                 }
 
                             }
                         }, immersionKitDataFetchingOptions: {
-                            type: "group", label: "Immersion Kit Data Fetching Options", content: {
+                            type: 'group', label: 'Immersion Kit Data Fetching Options', content: {
                                 fetchRetryCount: {
-                                    type: "number", label: "Fetch Retry Count", step: 1, min: 0, default: state.settings.fetchRetryCount,
-                                    hover_tip: "Set how many times you would like to allow retrying the fetch for sentences (to workaround backend issues).",
+                                    type: 'number', label: 'Fetch Retry Count', step: 1, min: 0, default: state.settings.fetchRetryCount,
+                                    hover_tip: 'Set how many times you would like to allow retrying the fetch for sentences (to workaround backend issues).',
                                     on_change: onFetchOptionChanged
                                 }, fetchRetryDelay: {
-                                    type: "number", label: "Fetch Retry Delay (ms)", step: 1, min: 0, default: state.settings.fetchRetryDelay,
-                                    hover_tip: "Set the delay in milliseconds between each retry attempt.",
+                                    type: 'number', label: 'Fetch Retry Delay (ms)', step: 1, min: 0, default: state.settings.fetchRetryDelay,
+                                    hover_tip: 'Set the delay in milliseconds between each retry attempt.',
                                     on_change: onFetchOptionChanged
                                 }
                             }
@@ -1144,71 +1143,62 @@
                 }, sorting: {
                     type: 'page', label: 'Sorting', content: {
                         sentenceSortOptions: {
-                            type: "group", label: "Sentence Sorting Options", content: {
+                            type: 'group', label: 'Sentence Sorting Options', content: {
                                 sentenceSorting: {
-                                    type: "dropdown", label: "Primary Sorting Method", default: state.settings.sentenceSorting, content: sortingMethods,
-                                    hover_tip: "Choose in what order the sentences will be presented.\nDefault = Exactly as retrieved from Immersion Kit",
+                                    type: 'dropdown', label: 'Primary Sorting Method', default: state.settings.sentenceSorting, content: sortingMethods,
+                                    hover_tip: 'Choose in what order the sentences will be presented.\nDefault = Exactly as retrieved from Immersion Kit',
                                     on_change: onPrimarySortOptionChanged
                                 }, sentenceSortingSecondary: {
-                                    type: "dropdown", label: "Secondary Sorting Method", default: state.settings.sentenceSortingSecondary, content: getSecondarySortingMethods(state.settings.sentenceSorting),
-                                    hover_tip: "Choose how you would like to sort equivalencies in the primary sorting method.\nDefault = No secondary sorting"
+                                    type: 'dropdown', label: 'Secondary Sorting Method', default: state.settings.sentenceSortingSecondary, content: getSecondarySortingMethods(state.settings.sentenceSorting),
+                                    hover_tip: 'Choose how you would like to sort equivalencies in the primary sorting method.\nDefault = No secondary sorting'
                                 }
                             }
                         }
                     }
                 }, filters: {
-                    type: "page", label: "Filters", content: {
+                    type: 'page', label: 'Filters', content: {
                         sentenceFilteringOptions: {
-                            type: "group", label: "Sentence Filtering Options", content: {
+                            type: 'group', label: 'Sentence Filtering Options', content: {
                                 filterExactMatch: {
-                                    type: "checkbox", label: "Exact Match", default: state.settings.filterExactMatch,
+                                    type: 'checkbox', label: 'Exact Match', default: state.settings.filterExactMatch,
                                     hover_tip: 'Text must match term exactly, i.e., this filters out conjugations/inflections.\nChecking this for a word with kanji means it will not match if the sentence has it only in kana form and vice-versa for kana-only vocabulary.\n\nThis filtering is done after the results are retrieved from Immersion Kit and may yield different results than the "Exact Search" option (below) when the latter is not used.'
                                 },
                                 filterAnime: {
-                                    type: "list", label: "Anime", multi: true, size: 6, default: state.settings.filterAnime, content: state.content.anime,
-                                    hover_tip: "Select the anime that can be included in the examples."
-                                    // }, filterAnimeShows: {
-                                    //     type: "list", label: "Anime Shows", multi: true, size: 6, default: state.settings.filterAnimeShows, content: state.content.animeShows,
-                                    //     hover_tip: "Select the anime shows that can be included in the examples."
-                                    // }, filterAnimeMovies: {
-                                    //     type: "list", label: "Anime Movies", multi: true, size: 6, default: state.settings.filterAnimeMovies, content: state.content.animeMovies,
-                                    //     hover_tip: "Select the anime movies that can be included in the examples."
-                                    // }, filterGhibli: {
-                                    //     type: "list", label: "Ghibli Movies", multi: true, size: 6, default: state.settings.filterGhibli, content: state.content.ghibli,
-                                    //     hover_tip: "Select the Studio Ghibli movies that can be included in the examples."
+                                    type: 'list', label: 'Anime', multi: true, size: 6, default: state.settings.filterAnime, content: state.content.anime,
+                                    hover_tip: 'Select the anime that can be included in the examples.'
                                 }, filterDramas: {
-                                    type: "list", label: "Drama", multi: true, size: 6, default: state.settings.filterDramas, content: state.content.drama,
-                                    hover_tip: "Select the dramas that can be included in the examples."
+                                    type: 'list', label: 'Drama', multi: true, size: 6, default: state.settings.filterDramas, content: state.content.drama,
+                                    hover_tip: 'Select the dramas that can be included in the examples.'
                                 }, filterGames: {
-                                    type: "list", label: "Games", multi: true, size: 3, default: state.settings.filterGames, content: state.content.games,
-                                    hover_tip: "Select the video games that can be included in the examples."
+                                    type: 'list', label: 'Games', multi: true, size: 3, default: state.settings.filterGames, content: state.content.games,
+                                    hover_tip: 'Select the video games that can be included in the examples.'
                                 }, filterLiterature: {
-                                    type: "list", label: "Literature", multi: true, size: 6, default: state.settings.filterLiterature, content: state.content.literature,
-                                    hover_tip: "Select the pieces of literature that can be included in the examples."
+                                    type: 'list', label: 'Literature', multi: true, size: 6, default: state.settings.filterLiterature, content: state.content.literature,
+                                    hover_tip: 'Select the pieces of literature that can be included in the examples.'
                                 }, filterNews: {
-                                    type: "list", label: "News", multi: true, size: 6, default: state.settings.filterNews, content: state.content.news,
-                                    hover_tip: "Select the news sources that can be included in the examples."
+                                    type: 'list', label: 'News', multi: true, size: 6, default: state.settings.filterNews, content: state.content.news,
+                                    hover_tip: 'Select the news sources that can be included in the examples.'
                                 }
                             }
                         }, immersionKitSearchOptions: {
-                            type: "group", label: "Immersion Kit Search Options", content: {
+                            type: 'group', label: 'Immersion Kit Search Options', content: {
                                 immersionKitSearchDescription: {
-                                    type: 'section', label: "Changes here cause an API request unless already cached."
+                                    type: 'section', label: 'Changes here cause an API request unless already cached.'
                                 }, filterExactSearch: {
-                                    type: "checkbox", label: "Exact Search", default: state.settings.filterExactSearch,
-                                    hover_tip: "Text must match term exactly, i.e., this filters out conjugations/inflections.\nChecking this for a word with kanji means it will not match if the sentence has it only in kana form and vice-versa for kana-only vocabulary."
+                                    type: 'checkbox', label: 'Exact Search', default: state.settings.filterExactSearch,
+                                    hover_tip: 'Text must match term exactly, i.e., this filters out conjugations/inflections.\nChecking this for a word with kanji means it will not match if the sentence has it only in kana form and vice-versa for kana-only vocabulary.'
                                 }, filterWaniKaniLevel: {
-                                    type: "checkbox", label: "WaniKani Level", default: state.settings.filterWaniKaniLevel,
-                                    hover_tip: "Only show sentences with maximum 1 word outside of your current WaniKani level.",
+                                    type: 'checkbox', label: 'WaniKani Level', default: state.settings.filterWaniKaniLevel,
+                                    hover_tip: 'Only show sentences with maximum 1 word outside of your current WaniKani level.',
                                 }, filterJLPTLevel: {
-                                    type: "dropdown", label: "JLPT Level", default: state.settings.filterJLPTLevel, content: jlptOptions,
-                                    hover_tip: "Only show sentences matching a particular JLPT Level or easier.",
+                                    type: 'dropdown', label: 'JLPT Level', default: state.settings.filterJLPTLevel, content: jlptOptions,
+                                    hover_tip: 'Only show sentences matching a particular JLPT Level or easier.',
                                 }
                             }
                         }
                     }
                 }, credits: {
-                    type: "html", label: "Powered by", html: '<a href="https://www.immersionkit.com" style="vertical-align:middle;vertical-align:-webkit-baseline-middle;vertical-align:-moz-middle-with-baseline;">immersionkit.com</a>'
+                    type: 'html', label: 'Powered by', html: '<a href="https://www.immersionkit.com" style="vertical-align:middle;vertical-align:-webkit-baseline-middle;vertical-align:-moz-middle-with-baseline;">immersionkit.com</a>'
                 },
             }
         };
@@ -1217,15 +1207,15 @@
     }
 
     async function onAudioPlaybackOptionChanged(name, value) {
-        const audioContainer = state.baseEl?.querySelector("audio");
+        const audioContainer = state.baseEl?.querySelector('audio');
         if (audioContainer === null) return;
         switch (name) {
-            case "playbackRate":
+            case 'playbackRate':
                 if (value === state.settings.playbackRate) return;
                 state.settings.playbackRate = value;
                 audioContainer.playbackRate = value * 2 / 100;
                 break;
-            case "playbackVolume":
+            case 'playbackVolume':
                 if (value === state.settings.playbackVolume) return;
                 state.settings.playbackVolume = value;
                 audioContainer.volume = value / 100;
@@ -1244,7 +1234,7 @@
     async function onFetchOptionChanged(name, value) {
         let prevRetryCount;
         switch (name) {
-            case "fetchRetryCount":
+            case 'fetchRetryCount':
                 // TODO: Possibly make this not affect the fetch count when the dialog was canceled instead of saved
                 if (value === state.settings.fetchRetryCount) return;
                 prevRetryCount = state.settings.fetchRetryCount;
@@ -1254,7 +1244,7 @@
                     await renderSentences(data);
                 }
                 break;
-            case "fetchRetryDelay":
+            case 'fetchRetryDelay':
                 if (value === state.settings.fetchRetryDelay) return;
                 state.settings.fetchRetryDelay = value;
                 break;
@@ -1264,7 +1254,7 @@
     async function onMaxBoxHeightOptionChanged(name, value) {
         if (value === state.settings.maxBoxHeight) return;
         if (!Number.isNaN(Number(value))) {
-            value += "px";
+            value += 'px';
             state.settings.maxBoxHeight = wkof.settings[scriptId].maxBoxHeight = value;
         }
         const replacement = `$1 ${value};`;
@@ -1281,12 +1271,12 @@
         // Revert any modifications that were unsaved, or finalize any that were.
         await Promise.all([
             onShowOnKanjiOptionChanged('showOnKanji', settings.showOnKanji),
-            onAudioPlaybackOptionChanged("playbackRate", settings.playbackRate),
-            onAudioPlaybackOptionChanged("playbackVolume", settings.playbackVolume),
-            onExampleLimitOptionChanged("exampleLimit", settings.exampleLimit),
-            onFetchOptionChanged("fetchRetryCount", settings.fetchRetryCount),
-            onFetchOptionChanged("fetchRetryDelay", settings.fetchRetryDelay),
-            onMaxBoxHeightOptionChanged("maxBoxHeight", settings.maxBoxHeight),
+            onAudioPlaybackOptionChanged('playbackRate', settings.playbackRate),
+            onAudioPlaybackOptionChanged('playbackVolume', settings.playbackVolume),
+            onExampleLimitOptionChanged('exampleLimit', settings.exampleLimit),
+            onFetchOptionChanged('fetchRetryCount', settings.fetchRetryCount),
+            onFetchOptionChanged('fetchRetryDelay', settings.fetchRetryDelay),
+            onMaxBoxHeightOptionChanged('maxBoxHeight', settings.maxBoxHeight),
             onTextShowOptionChanged('showJapanese', settings.showJapanese),
             onTextShowOptionChanged('showFurigana', settings.showFurigana),
             onTextShowOptionChanged('showEnglish', settings.showEnglish),
@@ -1296,16 +1286,16 @@
     async function onTextShowOptionChanged(name, value) {
         let selector;
         switch (name) {
-            case "showEnglish":
+            case 'showEnglish':
                 if (value === state.settings.showEnglish) return;
                 state.settings.showEnglish = value;
                 selector = '.example-text .en > span';
                 break;
-            case "showFurigana":
+            case 'showFurigana':
                 if (value === state.settings.showFurigana) return;
                 state.settings.showFurigana = value;
             // fallthrough
-            case "showJapanese":
+            case 'showJapanese':
                 if (value === state.settings.showJapanese) return;
                 state.settings.showJapanese = value;
                 selector = '.example-text .ja > span';
@@ -1333,7 +1323,7 @@
     }
 
     function validateMaxHeight(value) {
-        return value === undefined || value === null || value === "" || validCssUnitRegex.test(value) || 'Number and (optional) valid unit type only';
+        return value === undefined || value === null || value === '' || validCssUnitRegex.test(value) || 'Number and (optional) valid unit type only';
     }
 
     function validatePlaybackRate(value) {
@@ -1350,7 +1340,7 @@
 
     async function addStyle() {
         if (document.getElementById(styleSheetName)) return;
-        state.styleSheetEl = Object.assign(document.createElement("style"), {
+        state.styleSheetEl = Object.assign(document.createElement('style'), {
             id: styleSheetName,
             type: 'text/css',
             // language=CSS
