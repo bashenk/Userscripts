@@ -729,10 +729,6 @@
                 textContent: '🔈'
             }),
             jaEl = Object.assign(document.createElement('div'), {className: 'ja'}),
-            jaSpanEl = Object.assign(document.createElement('span'), {
-                className: 'base',
-                innerHTML: example.furiganaObject.getExpressionHtml()
-            }),
             jaFuriganaSpanEl = Object.assign(document.createElement('span'), {
                 className: 'furigana',
                 innerHTML: example.furiganaObject.getFuriganaHtml()
@@ -740,9 +736,6 @@
             enEl = Object.assign(document.createElement('div'), {className: 'en'}),
             enSpanEl = Object.assign(document.createElement('span'), {textContent: example.translation}),
             elements = [
-                {element: jaSpanEl,
-                    classListUpdates: [{name: 'showJapanese', value: state.settings.showJapanese}, {name: 'showFurigana', value: state.settings.showFurigana}],
-                    clickListener: {name: 'showJapanese', value: state.settings.showJapanese}},
                 {element: jaFuriganaSpanEl,
                     classListUpdates: [{name: 'showJapanese', value: state.settings.showJapanese}, {name: 'showFurigana', value: state.settings.showFurigana}],
                     clickListener: {name: 'showFurigana', value: state.settings.showFurigana}},
@@ -754,7 +747,8 @@
         for (const {element, classListUpdates, clickListener} of elements) {
             for (const {name, value} of classListUpdates)
                 promises.push(updateClassListForSpanElement(element, name, value));
-            promises.push(updateOnClickListenerForSpanElement(jaSpanEl, clickListener.name, clickListener.value));
+            const {name, value} = clickListener;
+            promises.push(updateOnClickListenerForSpanElement(element, name, value));
         }
         await Promise.all(promises);
 
@@ -764,7 +758,6 @@
         textTitleEl.append(audioButtonEl);
         textParentEl.append(textTitleEl);
 
-        jaEl.append(jaSpanEl);
         jaEl.append(jaFuriganaSpanEl);
         enEl.append(enSpanEl);
         textParentEl.append(jaEl);
@@ -962,9 +955,9 @@
                 element.classList.toggle('show-on-hover', value === 'onhover');
                 break;
             case 'showFurigana':
-                if (element.classList.contains('base'))
-                    element.classList.toggle('hide', value !== 'never');
-                else if (element.classList.contains('furigana')) {
+                if (element.classList.contains('base')) {
+                    element.classList.toggle('hidden', value !== 'never');
+                } else if (element.classList.contains('furigana')) {
                     element.classList.toggle('show-ruby-on-hover', value === 'onhover');
                     element.classList.toggle('hide-ruby', value === 'never');
                 }
@@ -973,15 +966,16 @@
     }
 
     // ----------------------------------------------------ON CLICK---------------------------------------------------- //
+
     async function updateOnClickListenerForSpanElement(element, name, value) {
         switch (value) {
             case 'always':
             case 'onhover':
             case 'never':
-                if (name !== 'showFurigana') await removeOnClickEventListener(element);
+                if (name !== 'showFurigana') removeOnClickEventListener(element);
                 break;
             case 'onclick':
-                await attachShowOnClickEventListener(element);
+                attachShowOnClickEventListener(element);
                 break;
             default:
                 return;
@@ -995,16 +989,19 @@
             button.click();
         };
     }
-    async function attachShowOnClickEventListener(element) {
-        // Assign onclick function to toggle the .show-on-click class
-        element.onclick = e => {
-            e.stopPropagation(); // prevent this click from triggering the audio to play
-            element.classList.toggle('show-on-click');
-        };
+
+    function onShowOnClick(event) {
+        event.stopPropagation(); // prevent this click from triggering the audio to play
+        event.target.classList.toggle('show-on-click');
     }
 
-    async function removeOnClickEventListener(element) {
-        element.onclick = null;
+    function attachShowOnClickEventListener(element) {
+        // Assign an onclick function to toggle the .show-on-click class
+        element.addEventListener('click', onShowOnClick, {passive: true});
+    }
+
+    function removeOnClickEventListener(element) {
+        element.removeEventListener('click', onShowOnClick, {passive: true});
     }
 
     // ---------------------------------------------------------------------------------------------------------------- //
