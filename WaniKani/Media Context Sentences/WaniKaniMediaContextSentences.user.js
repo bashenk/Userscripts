@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Media Context Sentences
 // @description  Formerly named "Wanikani Anime Sentences 2". Adds example sentences from anime, dramas, games, literature, and news for vocabulary from https://www.immersionkit.com.
-// @version      4.0.1
+// @version      4.0.2
 // @author       Inserio
 // @namespace    https://greasyfork.org/en/users/11878
 // @match        https://www.wanikani.com/*
@@ -23,7 +23,7 @@
         id: 'media-context-sentences',
         name: 'Media Context Sentences',
         secondarySortingKeyName: 'secondary',
-        version: '4.0.1'
+        version: '4.0.2'
     };
     script.styleSheetName = `${script.id}-style`;
     script.regex = {
@@ -109,23 +109,23 @@
             styleSheet: null,
         },
         handlers: {
-            onPlay: ({currentTarget: el}) => {
+            onPlay(button) {return ({currentTarget: el}) => {
                 if (el == null) return;
                 const {classNames:{audioIdle, audioPlaying}, settings:{general:{playback:{restartAudioOnPause}}}} = state;
-                for (const [key, audioEl] of Object.entries(state.elements.audio)) {
-                    if (key !== el.id && !audioEl.paused) audioEl.pause();
-                    if (restartAudioOnPause) audioEl.currentTime = 0;
+                for (const [key, {audio}] of Object.entries(state.elements.audio)) {
+                    if (key !== button.id && !audio.paused) audio.pause();
+                    if (restartAudioOnPause) audio.currentTime = 0;
                 }
-                el.classList.replace(audioIdle, audioPlaying);
-                el.textContent = '🔊';
-            },
-            onStop: ({currentTarget: el}) => {
+                button.classList.replace(audioIdle, audioPlaying);
+                button.textContent = '🔊';
+            };},
+            onStop(button) {return ({currentTarget: el}) => {
                 if (el == null) return;
                 const {audioIdle, audioPlaying} = state.classNames;
-                el.classList.replace(audioPlaying, audioIdle);
-                el.textContent = '🔈';
+                button.classList.replace(audioPlaying, audioIdle);
+                button.textContent = '🔈';
                 el.remove();
-            },
+            };},
         },
         // Container for other Immersion Kit stuff (memoized)
         get immersionKit() { return lazyProperty(this, 'immersionKit', ()=> ({
@@ -1208,6 +1208,7 @@
                 textContent: state.content.allContent.get(title).title,
             }),
             audioButtonEl = Object.assign(document.createElement('button'), {
+                id: `audio-button-${example.id}`,
                 type: 'button',
                 className: `${state.classNames.audioButton} ${state.classNames.audioIdle}`,
                 title: 'Play Audio',
@@ -1306,24 +1307,25 @@
     function configureAudioElement(element, example) {
         element.addEventListener('click', async function(e) {
             e.stopPropagation(); // prevent this click from triggering twice in some scenarios
-            const {elements: {audio, base}, handlers, settings} = state;
-            const id = `audio-button-${example.id}`;
-            const audioEl = audio[id] = (audio[id] || Object.assign(document.createElement('audio'), {
-                id: id,
-                src: example.sound_url,
-                playbackRate: settings.general.playback.playbackRate * 2 / 100,
-                volume: settings.general.playback.playbackVolume / 100,
-                onplay: handlers.onPlay,
-                onpause: handlers.onStop,
-                onended: handlers.onStop,
-                onabort: handlers.onStop,
-            }));
-            if (!audioEl.paused) {
-                audioEl.pause();
+            const {elements: {audio: audioEls, base}, handlers, settings} = state;
+            const {audio} = audioEls[element.id] = (audioEls[element.id] || {
+                button: element,
+                audio: Object.assign(document.createElement('audio'), {
+                    src: example.sound_url,
+                    playbackRate: settings.general.playback.playbackRate * 2 / 100,
+                    volume: settings.general.playback.playbackVolume / 100,
+                    onplay: handlers.onPlay(element),
+                    onpause: handlers.onStop(element),
+                    onended: handlers.onStop(element),
+                    onabort: handlers.onStop(element),
+                }),
+            });
+            if (!audio.paused) {
+                audio.pause();
                 return;
             }
-            base.append(audioEl);
-            await audioEl.play()?.catch(() => {});
+            base.append(audio);
+            await audio.play()?.catch(() => {});
         }, {passive: true});
     }
 
