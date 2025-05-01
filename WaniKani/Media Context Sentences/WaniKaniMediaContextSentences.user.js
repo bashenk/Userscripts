@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Media Context Sentences
 // @description  Formerly named "Wanikani Anime Sentences 2". Adds example sentences from anime, dramas, games, literature, and news for vocabulary from https://www.immersionkit.com.
-// @version      4.0.2
+// @version      4.0.3
 // @author       Inserio
 // @namespace    https://greasyfork.org/en/users/11878
 // @match        https://www.wanikani.com/*
@@ -23,7 +23,7 @@
         id: 'media-context-sentences',
         name: 'Media Context Sentences',
         secondarySortingKeyName: 'secondary',
-        version: '4.0.2'
+        version: '4.0.3'
     };
     script.styleSheetName = `${script.id}-style`;
     script.regex = {
@@ -1122,7 +1122,7 @@
     async function renderSentences() {
         const data = await fetchImmersionKitData();
         const {content, elements, immersionKit, settings, wkItemInfo} = state;
-        Object.values(elements.audio).forEach(el => {el.remove(); el = null;});
+        Object.values(elements.audio).forEach(el => {el.audio.remove(); el = null;});
         elements.audio = {};
         if (data == null)
             return (elements.sentences.textContent = 'Error fetching examples from Immersion Kit.');
