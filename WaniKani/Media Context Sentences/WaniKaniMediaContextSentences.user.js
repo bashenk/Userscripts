@@ -14,54 +14,202 @@
 // @grant        none
 // ==/UserScript==
 /* jshint esversion: 11 */
+/* eslint-disable no-irregular-whitespace */
 // noinspection CssUnusedSymbol,CssInvalidPropertyValue,CssUnresolvedCustomProperty,JSUnusedGlobalSymbols,JSNonASCIINames
 /* global wkItemInfo */
 (() => {
     'use strict';
-    const {wkof} = window, scriptName = 'Media Context Sentences', scriptId = 'media-context-sentences', styleSheetName = `${scriptId}-style`, scriptVersion = '4.0.0';
+    const {wkof} = window, script = {
+        id: 'media-context-sentences', name: 'Media Context Sentences',
+        version: '4.0.0', secondarySortingKeyName: 'secondary'
+    };
+    script.styleSheetName = `${script.id}-style`;
+    script.regex = {
+        anyUrl: new RegExp(), // default "empty" regex. Equivalent to `/(?:)/`
+        exampleLimitSearch: new RegExp(`(#${script.id} \\.example:nth-child)(\\(n\\+\\d+\\))?`), // /(#media-context-sentences \.example:nth-child)(\(n\+\d+\))?/
+        maxHeightSearch: new RegExp(`(#${script.id}\\s*{[^}]*?max-height:).*?;`), // /(#media-context-sentences\s*{[^}]*?max-height:) *[\d.] *+\w*;/
+        validCssUnit: /^((\d*\.)?\d+)((px)|(em)|(%)|(ex)|(ch)|(rem)|(vw)|(vh)|(vmin)|(vmax)|(cm)|(mm)|(in)|(pt)|(pc))$/i
+    };
+    Object.freeze(script);
     const state = {
+        classNames: {
+            audioButton: 'audio-btn',
+            audioIdle: 'audio-idle',
+            audioPlaying: 'audio-play',
+        },
+        // Used for working with the settings dialog and determining which sentences to show
+        content: {
+            deckIndex: {}, selections: {}, allContent: new Map(), keyTitleMap: new Map(), titleKeyMap: new Map(), anime: {}, drama: {}, games: {}, literature: {}, news: {}
+        },
+        // Default options for configuring the content in the settings dialog (memoized)
+        get contentOptions() { return lazyProperty(this, 'contentOptions', () => ({
+            whenShowText: {always: 'Always', onhover: 'On Hover', onclick: 'On Click'},
+            whenShowFurigana: {always: 'Always', onhover: 'On Hover', never: 'Never'},
+            jlpt: {0: 'No Filter', 1: 'N1', 2: 'N2', 3: 'N3', 4: 'N4', 5: 'N5'},
+            immersionKitAPIVersions: {'1': 'v1', '2': 'v2'},
+            sortingMethods: {
+                default: 'Default',
+                category: 'Category (anime, drama, etc.)',
+                source: 'Source Title',
+                shortness: 'Shortest sentences first',
+                longness: 'Longest sentences first',
+                position: 'Position of keyword in sentence',
+            },
+            secondarySortingMethodsToHide(primarySortingMethod) {
+                const keysToHide = [];
+                switch (primarySortingMethod) {
+                    case 'category':
+                        keysToHide.push('category');
+                        break;
+                    case 'longness':
+                    case 'shortness':
+                        keysToHide.push('shortness');
+                        keysToHide.push('longness');
+                        break;
+                    case 'source':
+                        keysToHide.push('category');
+                        keysToHide.push('source');
+                        break;
+                    case 'position':
+                        keysToHide.push('position');
+                        break;
+                    case 'default':
+                    default:
+                        keysToHide.push('category');
+                        keysToHide.push('source');
+                        keysToHide.push('shortness');
+                        keysToHide.push('longness');
+                        keysToHide.push('position');
+                        break;
+                }
+                return keysToHide;
+            },
+            secondarySortingMethods(primarySortingMethod) {
+                const sortingMethodsCopy = Object.assign({}, this.sortingMethods);
+                for (const oldKey of this.secondarySortingMethodsToHide(primarySortingMethod)) {
+                    // we do a little cheeky attribute injection for wkof's list generation...
+                    const newKey = `${oldKey}" class="hidden`;
+                    sortingMethodsCopy[newKey] = sortingMethodsCopy[oldKey];
+                    delete sortingMethodsCopy[oldKey];
+                }
+                return sortingMethodsCopy;
+            },
+        }), {enumerable: true}); },
+        // Referenced for quick access to elements used in this script
+        elements: {
+            // The base node
+            base: null,
+            // The audio nodes
+            audio: {},
+            // The element holding all the sentences (referenced so that sentences can be re-rendered after settings change)
+            sentences: null,
+            // The style sheet element
+            styleSheet: null,
+        },
+        handlers: {
+            onPlay: ({currentTarget: el}) => {
+                if (el == null) return;
+                const {classNames:{audioIdle, audioPlaying}, settings:{general:{playback:{restartAudioOnPause}}}} = state;
+                for (const [key, audioEl] of Object.entries(state.elements.audio)) {
+                    if (key !== el.id && !audioEl.paused) audioEl.pause();
+                    if (restartAudioOnPause) audioEl.currentTime = 0;
+                }
+                el.classList.replace(audioIdle, audioPlaying);
+                el.textContent = '🔊';
+            },
+            onStop: ({currentTarget: el}) => {
+                if (el == null) return;
+                const {audioIdle, audioPlaying} = state.classNames;
+                el.classList.replace(audioPlaying, audioIdle);
+                el.textContent = '🔈';
+                el.remove();
+            },
+        },
+        // Container for other Immersion Kit stuff (memoized)
+        get immersionKit() { return lazyProperty(this, 'immersionKit', ()=> ({
+            api: {
+                '1': {
+                    version: 1,
+                    origin: 'https://api.immersionkit.com',
+                    endpoints: {
+                        query: {
+                            pathname: '/look_up_dictionary',
+                            getSearch(keyword, {exactSearch, exampleLimit, jlptLevel, primarySorting, tags, waniKaniLevel}) {
+                                keyword = keyword.replace('〜', ''); // for "counter" kanji
+                                if (exactSearch) keyword = `「${keyword}」`;
+                                let sentenceSorting = '';
+                                switch (primarySorting) {
+                                    case 'shortness':
+                                    case 'longness':
+                                        sentenceSorting = `&sort=${sentenceSorting}`;
+                                }
+                                const jlpt = `&jlpt=${jlptLevel}`;
+                                const wk = `&wk=${waniKaniLevel ? state.userLevel : 0}`;
+                                const tag = `${tags.length > 0 ? `&tags=${tags}` : ''}`;
+                                const limit = Number(exampleLimit) > 0 ? `&limit=${exampleLimit}` : '';
+                                return `?keyword=${keyword}${jlpt}${wk}${tag}${sentenceSorting}${limit}`;
+                            },
+                        },
+                    },
+                },
+                '2': {
+                    endpoints: {
+                        index: {pathname: '/index_meta'},
+                        query: {
+                            pathname: '/search',
+                            getSearch(keyword, {exactSearch, exampleLimit, jlptLevel, primarySorting, tags, waniKaniLevel}) {
+                                keyword = keyword.replace('〜', ''); // for "counter" kanji
+                                let sentenceSorting = '';
+                                switch (primarySorting) {
+                                    case 'longness':
+                                        sentenceSorting = '&sort=sentence_length:desc';
+                                        break;
+                                    case 'shortness':
+                                        sentenceSorting = '&sort=sentence_length:asc';
+                                        break;
+                                }
+                                const exact = `&exactMatch=${exactSearch ? 'true' : 'false'}`;
+                                const jlpt = `&jlpt=${jlptLevel}`;
+                                const wk = `&wk=${waniKaniLevel ? state.userLevel : 0}`;
+                                const tag = `${tags.length > 0 ? `&tags=${tags}` : ''}`;
+                                const limit = Number(exampleLimit) > 0 ? `&limit=${exampleLimit}` : '';
+                                return `?q=${keyword}${exact}${jlpt}${wk}${tag}${sentenceSorting}${limit}`;
+                            },
+                        },
+                    },
+                    origin: 'https://apiv2.immersionkit.com',
+                    version: 2,
+                },
+            },
+            baseContentUrl: 'https://us-southeast-1.linodeobjects.com/immersionkit/media/',
+            // Cached to aid in determining whether retries should be done
+            currentSearchUrl: null,
+            cache: {
+                key: `${script.id}.immersion-kit-data`,
+                // Cached so sentences can be re-rendered after settings change and to persist lookups between sessions
+                urls: {},
+            },
+            // Cache for the number of fetches done for any given url
+            fetchCount: {},
+            getSearchOptions({general: {appearance: {exampleLimit=0}}, sorting: {primary: primarySorting='shortness'}, filters: {exactSearch=false, jlptLevel=0, tags='', waniKaniLevel=false}}={}) {
+                if (Array.isArray(tags)) tags = tags.join(',');
+                return {exactSearch, exampleLimit, jlptLevel, primarySorting, tags, waniKaniLevel};
+            },
+        })); },
+        // The settings object
         settings: {
-            // The maximum height of the container box. If no unit type is provided, px (pixels) is automatically appended.
-            maxBoxHeight: '320px',
-            // 0 = No limit
-            exampleLimit: 0,
-            // Allows the box to appear in the Examples tab for kanji as well
-            showOnKanji: false,
-            // Options: always|onhover|onclick
-            showJapanese: 'always',
-            // Options: always|onhover|never
-            showFurigana: 'onhover',
-            // Options: always|onhover|onclick
-            showEnglish: 'onhover',
-            // Options: exact|fuzzy // TODO: Implement
-            highlighting: 'exact',
-            // If true, will restart the audio track from the beginning when the user pauses.
-            // If false, will save the current position and resume from there the next time that sentence is played.
-            restartAudioOnPause: true,
-            // Playback speed in percent = (playbackRate * 2)
-            playbackRate: 50,
-            // Playback volume in percent
-            playbackVolume: 100,
-            // If greater than 0, will attempt to retry fetching results if none were found.
-            fetchRetryCount: 0,
-            // Milliseconds to wait before retrying fetch
-            fetchRetryDelay: 5000,
-            // Options: default|category|shortness|longness|position
-            sentenceSorting: 'default',
-            // Options: default(none)|category|shortness|longness|position
-            sentenceSortingSecondary: 'default',
-            // Mapping of the content title to the enabled state. All content is enabled by default.
-            // Titles are taken from https://www.immersionkit.com/information and modified after testing a few example search results.
+            // Sentence Filtering Options
             filters: {
                 // Filters the results to only those with sentences exactly matching the keyword (i.e., this filters after the results are found)
                 // TODO: Make the kanji (i.e., not the okurigana) required by default for non-kana-only vocab
                 exactMatch: false,
                 // Wraps the search term in Japanese quotes (i.e., 「term」) before sending it to Immersion Kit
                 exactSearch: false,
-                // Tells Immersion Kit to filter out results containing words more than 1 level higher than the current WaniKani level (possibly inaccurate, due to frequent changes in WK level contents)
-                waniKaniLevel: false,
                 // If greater than 0, tells Immersion Kit to filter out results that are not at the selected JLPT level or easier.
-                jLPTLevel: 0,
+                jlptLevel: 0,
+                // Mapping of the content title to the enabled state.
+                // All content is enabled by default.
+                // Titles are taken from https://www.immersionkit.com/information and modified after testing a few example search results.
                 // Including the full lists for v1 compatability
                 lists: {
                     anime: {
@@ -266,163 +414,356 @@
                         [`山田小学校で最後の稲刈り`]: true,
                     },
                 },
+                // Not implemented (If implemented, would filter the results to only those matching the provided category tags) - TODO: Priority low
+                tags: '',
+                // Tells Immersion Kit to filter out results containing words more than 1 level higher than the current WaniKani level
+                // (possibly inaccurate, due to frequent changes in WK level contents)
+                waniKaniLevel: false,
             },
-            // Immersion Kit API Version
-            immersionKitAPIVersion: '2',
-            // Enables debugging statements to find and help remedy bugs when they occur.
-            debugging: false,
-            // This works as a "fail-early" measure and will not show any normal results when an issue is found.
-            failWhenHidden: false,
+            // General
+            general: {
+                // Appearance Options
+                appearance: {
+                    // 0 = No limit
+                    exampleLimit: 0,
+                    // Options for highlighting the keyword in the sentence: exact|fuzzy
+                    // TODO: Implement
+                    highlighting: 'exact',
+                    // The maximum height of the container box. If no unit type is provided, px (pixels) is automatically appended.
+                    maxBoxHeight: '320px',
+                    // Options for when to show English translation: always|onhover|onclick
+                    showEnglish: 'onhover',
+                    // Options for when to show Furigana: always|onhover|never
+                    showFurigana: 'onhover',
+                    // Options for when to show Japanese text: always|onhover|onclick
+                    showJapanese: 'always',
+                    // Allows the box to appear in the Examples tab for kanji as well
+                    showOnKanji: false,
+                },
+                // Playback Options
+                playback: {
+                    // If true, will restart the audio track from the beginning when the user pauses.
+                    // If false, will save the current position and resume from there the next time that sentence is played.
+                    restartAudioOnPause: true,
+                    // Playback speed in percent = (playbackRate * 2)
+                    playbackRate: 50,
+                    // Playback volume in percent
+                    playbackVolume: 100,
+                },
+                // Immersion Kit Data Fetching Options
+                dataFetching: {
+                    // If greater than 0, will attempt to retry fetching results if none were found.
+                    retryCount: 0,
+                    // Milliseconds to wait before retrying fetch
+                    retryDelay: 5000,
+                    // Whether to check the Last-Modified header to see if the data is still up to date or not.
+                    // If a Last-Modified header is not present, the data is assumed to be out-of-date and will be re-fetched
+                    checkLastModified: false,
+                },
+                // Advanced Options
+                advanced: {
+                    // Enables debugging statements to find and help remedy bugs when they occur.
+                    debugging: false,
+                    // This works as a "fail-early" measure and will not show any normal results when an issue is found.
+                    failWhenHidden: false,
+                    // Immersion Kit API Version
+                    immersionKitAPIVersion: '2',
+                }
+            },
+            // Sentence Sorting Options
+            sorting: {
+                // Options for primary sentence sorting: default|category|shortness|longness|position
+                primary: 'default',
+                // Options for secondary sentence sorting: default(none)|category|shortness|longness|position
+                [script.secondarySortingKeyName]: 'default',
+            },
             // The current version of the stored settings
-            version: scriptVersion,
+            version: script.version,
         },
-        // Default options for configuring the settings dialog (memoized)
-        get options() { delete this.options; this.options = {
-                showText: {always: 'Always', onhover: 'On Hover', onclick: 'On Click'},
-                showFurigana: {always: 'Always', onhover: 'On Hover', never: 'Never'},
-                jlpt: {0: 'No Filter', 1: 'N1', 2: 'N2', 3: 'N3', 4: 'N4', 5: 'N5'},
-                immersionKitAPIVersion: {'1': 'v1', '2': 'v2'},
-                sortingMethods: {
-                    default: 'Default',
-                    category: 'Category (anime, drama, etc.)',
-                    source: 'Source Title',
-                    shortness: 'Shortest sentences first',
-                    longness: 'Longest sentences first',
-                    position: 'Position of keyword in sentence',
+        get settingsDialog() { return ({
+            script_id: script.id, title: script.name, on_save: onSettingsSaved, on_close: onSettingsClosed,
+            content: {
+                general: {
+                    type: 'page', label: 'General', content: {
+                        generalDescription: {
+                            type: 'section', label: 'Changes to settings in this tab can be previewed in real-time.',
+                        },
+                        appearanceOptions: {
+                            type: 'group', label: 'Appearance Options', content: {
+                                showOnKanji: {
+                                    type: 'checkbox', label: 'Show on Kanji Items',
+                                    default: state.settings.general.appearance.showOnKanji,
+                                    hover_tip: 'Allows the box to appear in the Examples tab for kanji in addition to vocabulary.',
+                                    on_change: onAppearanceOptionChanged,
+                                    path: '@general.appearance.showOnKanji',
+                                },
+                                maxBoxHeight: {
+                                    type: 'text', label: 'Box Height', step: 1, min: 0,
+                                    default: state.settings.general.appearance.maxBoxHeight,
+                                    hover_tip: 'Set the maximum height of the container box.\nIf no unit type is provided, px (pixels) is automatically appended.',
+                                    on_change: onAppearanceOptionChanged, validate: validateMaxHeight,
+                                    path: '@general.appearance.maxBoxHeight',
+                                },
+                                exampleLimit: {
+                                    type: 'number', label: 'Example Limit', step: 1, min: 0,
+                                    default: state.settings.general.appearance.exampleLimit,
+                                    hover_tip: 'Limit the number of entries that may appear.\nSet to 0 to show as many as possible (note that this can really lag the list generation when there are a very large number of matches).',
+                                    on_change: onAppearanceOptionChanged,
+                                    path: '@general.appearance.exampleLimit',
+                                },
+                                showJapanese: {
+                                    type: 'dropdown', label: 'Show Japanese',
+                                    default: state.settings.general.appearance.showJapanese,
+                                    content: state.contentOptions.whenShowText,
+                                    hover_tip: 'When to show Japanese text.\nHover enables transcribing a sentences first (play audio by clicking the image to avoid seeing the answer).',
+                                    on_change: onAppearanceOptionChanged,
+                                    path: '@general.appearance.showJapanese',
+                                },
+                                showFurigana: {
+                                    type: 'dropdown', label: 'Show Furigana',
+                                    default: state.settings.general.appearance.showFurigana,
+                                    content: state.contentOptions.whenShowFurigana,
+                                    hover_tip: 'These have been autogenerated so there may be mistakes.',
+                                    on_change: onAppearanceOptionChanged,
+                                    path: '@general.appearance.showFurigana',
+                                },
+                                showEnglish: {
+                                    type: 'dropdown', label: 'Show English',
+                                    default: state.settings.general.appearance.showEnglish,
+                                    content: state.contentOptions.whenShowText,
+                                    hover_tip: 'Hover or click allows testing your understanding before seeing the answer.',
+                                    on_change: onAppearanceOptionChanged,
+                                    path: '@general.appearance.showEnglish',
+                                },
+                            },
+                        },
+                        playbackOptions: {
+                            type: 'group', label: 'Playback Options', content: {
+                                playbackRate: {
+                                    type: 'input', subtype: 'range', label: 'Playback Speed',
+                                    default: state.settings.general.playback.playbackRate,
+                                    hover_tip: 'Speed to play back audio. (10% - 200%)',
+                                    on_change: onPlaybackOptionChanged, validate: validatePlaybackRate,
+                                    path: '@general.playback.playbackRate',
+                                },
+                                playbackVolume: {
+                                    type: 'input', subtype: 'range', label: 'Playback Volume',
+                                    default: state.settings.general.playback.playbackVolume,
+                                    hover_tip: 'Volume to play back audio. (0% - 100%)',
+                                    on_change: onPlaybackOptionChanged, validate: validatePlaybackVolume,
+                                    path: '@general.playback.playbackVolume',
+                                },
+                                restartAudioOnPause: {
+                                    type: 'checkbox', label: 'Restart Audio on Pause',
+                                    default: state.settings.general.playback.restartAudioOnPause,
+                                    hover_tip: 'If true, will restart the audio track from the beginning when the user pauses.\nIf false, will save the current position and resume from there the next time that sentence is played.',
+                                    on_change: onPlaybackOptionChanged,
+                                    path: '@general.playback.restartAudioOnPause',
+                                }
+                            },
+                        },
+                        immersionKitDataFetchingOptions: {
+                            type: 'group', label: 'Immersion Kit Data Fetching Options', content: {
+                                fetchRetryCount: {
+                                    type: 'number', label: 'Fetch Retry Count', step: 1, min: 0,
+                                    default: state.settings.general.dataFetching.retryCount,
+                                    hover_tip: 'Set how many times you would like to allow retrying the fetch for sentences (to workaround backend issues).',
+                                    on_change: onFetchOptionChanged,
+                                    path: '@general.dataFetching.retryCount',
+                                },
+                                fetchRetryDelay: {
+                                    type: 'number', label: 'Fetch Retry Delay (ms)', step: 1, min: 0,
+                                    default: state.settings.general.dataFetching.retryDelay,
+                                    hover_tip: 'Set the delay in milliseconds between each retry attempt.',
+                                    on_change: onFetchOptionChanged,
+                                    path: '@general.dataFetching.retryDelay',
+                                },
+                                checkLastModified: {
+                                    type: 'checkbox', label: 'Compare Last-Modified Date',
+                                    default: state.settings.general.dataFetching.checkLastModified,
+                                    hover_tip: 'If true, will check the last modified date of the sentences before fetching.\nIf false, will always fetch the sentences.\n\nNote that as of the time of writing, Immersion Kit does not send a Last-Modified header, so checking this option will mean that the cache will always be ignored.',
+                                    on_change: onFetchOptionChanged,
+                                    path: '@general.dataFetching.checkLastModified',
+                                }
+                            },
+                        },
+                        advancedOptions: {
+                            type: 'group', label: 'Advanced Options', content: {
+                                debugging: {
+                                    type: 'checkbox', label: 'Debugging',
+                                    default: state.settings.general.advanced.debugging,
+                                    hover_tip: 'Show additional debugging information in the console.',
+                                    on_change: onAdvancedOptionChanged,
+                                    path: '@general.advanced.debugging',
+                                },
+                                failWhenHidden: {
+                                    type: 'checkbox', label: 'Fail When Hidden',
+                                    default: state.settings.general.advanced.failWhenHidden,
+                                    hover_tip: 'Immediately fail to display the sentences if any are available but hidden, instead showing a message including the list of hidden sentences.\nNote: Toggling this option will immediately cause a rerender of the sentences.',
+                                    on_change: onAdvancedOptionChanged,
+                                    path: '@general.advanced.failWhenHidden',
+                                },
+                                immersionKitAPIVersion: {
+                                    type: 'dropdown', label: 'Immersion Kit API Version',
+                                    default: state.settings.general.advanced.immersionKitAPIVersion,
+                                    content: state.contentOptions.immersionKitAPIVersions,
+                                    hover_tip: 'Select the Immersion Kit API version to use.',
+                                    on_change: onAdvancedOptionChanged,
+                                    path: '@general.advanced.immersionKitAPIVersion',
+                                },
+                                flushCachedData: {
+                                    type: 'button', label: 'Cached Data', text: 'Flush',
+                                    hover_tip: 'Immediately flush all cached Immersion Kit data.',
+                                    on_click: onFlushCachedDataClicked,
+                                },
+                            },
+                        },
+                    },
                 },
-                secondarySortingMethodsToHide(primarySortingMethod) {
-                    const keysToHide = [];
-                    switch (primarySortingMethod) {
-                        case 'category':
-                            keysToHide.push('category');
-                            break;
-                        case 'longness':
-                        case 'shortness':
-                            keysToHide.push('shortness');
-                            keysToHide.push('longness');
-                            break;
-                        case 'source':
-                            keysToHide.push('category');
-                            keysToHide.push('source');
-                            break;
-                        case 'position':
-                            keysToHide.push('position');
-                            break;
-                        case 'default':
-                        default:
-                            keysToHide.push('category');
-                            keysToHide.push('source');
-                            keysToHide.push('shortness');
-                            keysToHide.push('longness');
-                            keysToHide.push('position');
-                            break;
-                    }
-                    return keysToHide;
+                sorting: {
+                    type: 'page', label: 'Sorting', content: {
+                        sentenceSortOptions: {
+                            type: 'group', label: 'Sentence Sorting Options', content: {
+                                primary: {
+                                    type: 'dropdown', label: 'Primary Sorting Method',
+                                    default: state.settings.sorting.primary,
+                                    content: state.contentOptions.sortingMethods,
+                                    hover_tip: 'Choose in what order the sentences will be presented.\nDefault = Exactly as retrieved from Immersion Kit',
+                                    on_change: onPrimarySortOptionChanged,
+                                    path: '@sorting.primary',
+                                },
+                                [script.secondarySortingKeyName]: {
+                                    type: 'dropdown', label: 'Secondary Sorting Method',
+                                    default: state.settings.sorting[script.secondarySortingKeyName],
+                                    content: state.contentOptions.secondarySortingMethods(state.settings.sorting.primary),
+                                    hover_tip: 'Choose how you would like to sort equivalencies in the primary sorting method.\nDefault = No secondary sorting',
+                                    path: `@sorting.${script.secondarySortingKeyName}`,
+                                },
+                            },
+                        },
+                    },
                 },
-                secondarySortingMethods(primarySortingMethod) {
-                    const sortingMethodsCopy = Object.assign({}, this.sortingMethods);
-                    for (const oldKey of this.secondarySortingMethodsToHide(primarySortingMethod)) {
-                        // we do a little cheeky attribute injection for wkof's list generation...
-                        const newKey = `${oldKey}" class="hidden`;
-                        sortingMethodsCopy[newKey] = sortingMethodsCopy[oldKey];
-                        delete sortingMethodsCopy[oldKey];
-                    }
-                    return sortingMethodsCopy;
+                filters: {
+                    type: 'page', label: 'Filters', content: {
+                        sentenceFilteringOptions: {
+                            type: 'group', label: 'Sentence Filtering Options', content: {
+                                filterExactMatch: {
+                                    type: 'checkbox', label: 'Exact Match',
+                                    default: state.settings.filters.exactMatch,
+                                    hover_tip: 'Text must match term exactly, i.e., this filters out conjugations/inflections.\nChecking this for a word with kanji means it will not match if the sentence has it only in kana form and vice-versa for kana-only vocabulary.\n\nThis filtering is done after the results are retrieved from Immersion Kit and may yield different results than the "Exact Search" option (below) when the latter is not used.',
+                                    path: '@filters.exactMatch',
+                                },
+                                filterAnime: {
+                                    type: 'list', label: 'Anime', multi: true,
+                                    size: 10,
+                                    default: state.content.selections.anime,
+                                    content: state.content.anime,
+                                    hover_tip: 'Select the anime that can be included in the examples.',
+                                    path: '@filters.lists.anime',
+                                },
+                                filterDrama: {
+                                    type: 'list', label: 'Drama', multi: true,
+                                    size: 6,
+                                    default: state.content.selections.drama,
+                                    content: state.content.drama,
+                                    hover_tip: 'Select the dramas that can be included in the examples.',
+                                    path: '@filters.lists.drama',
+                                },
+                                filterGames: {
+                                    type: 'list', label: 'Games', multi: true,
+                                    size: 3,
+                                    default: state.content.selections.games,
+                                    content: state.content.games,
+                                    hover_tip: 'Select the video games that can be included in the examples.',
+                                    path: '@filters.lists.games',
+                                },
+                                filterLiterature: {
+                                    type: 'list', label: 'Literature', multi: true,
+                                    size: 6,
+                                    default: state.content.selections.literature,
+                                    content: state.content.literature,
+                                    hover_tip: 'Select the pieces of literature that can be included in the examples.',
+                                    path: '@filters.lists.literature',
+                                },
+                                filterNews: {
+                                    type: 'list', label: 'News', multi: true,
+                                    size: 6,
+                                    default: state.content.selections.news,
+                                    content: state.content.news,
+                                    hover_tip: 'Select the news sources that can be included in the examples.',
+                                    path: '@filters.lists.news',
+                                },
+                            },
+                        },
+                        immersionKitSearchOptions: {
+                            type: 'group', label: 'Immersion Kit Search Options', content: {
+                                immersionKitSearchDescription: {type: 'section', label: 'Changes here cause an API request unless already cached.'},
+                                filterExactSearch: {
+                                    type: 'checkbox', label: 'Exact Search',
+                                    default: state.settings.filters.exactSearch,
+                                    hover_tip: 'Text must match term exactly, i.e., this filters out conjugations/inflections.\nChecking this for a word with kanji means it will not match if the sentence has it only in kana form and vice-versa for kana-only vocabulary.',
+                                    path: '@filters.exactSearch',
+                                },
+                                filterWaniKaniLevel: {
+                                    type: 'checkbox', label: 'WaniKani Level',
+                                    default: state.settings.filters.waniKaniLevel,
+                                    hover_tip: 'Only show sentences with maximum 1 word outside of your current WaniKani level.',
+                                    path: '@filters.waniKaniLevel',
+                                },
+                                filterJLPTLevel: {
+                                    type: 'dropdown', label: 'JLPT Level',
+                                    default: state.settings.filters.jlptLevel,
+                                    content: state.contentOptions.jlpt,
+                                    hover_tip: 'Only show sentences matching a particular JLPT Level or easier.',
+                                    path: '@filters.jlptLevel',
+                                },
+                            },
+                        },
+                    },
                 },
-            }; return this.options; },
+                credits: {
+                    type: 'html', label: 'Powered by', html: '<a href="https://www.immersionkit.com" style="vertical-align:middle;vertical-align:-webkit-baseline-middle;vertical-align:-moz-middle-with-baseline;">https://www.immersionkit.com</a>',
+                },
+            },
+        }); },
+        // Current user's WaniKani level
         get userLevel() { return wkof ? wkof.user.level : 0; },
-        // Used for modifying the current WK Item Info Injector listener
-        wkItemInfoHandler: null,
-        // Used for working with the settings dialog and determining which sentences to show (memoized)
-        get content() { delete this.content; this.content = {
-            keyTitleMap: new Map(), titleKeyMap: new Map(), deckIndex: {}, allContent: new Map(), selections: {}, anime: {}, drama: {}, games: {}, literature: {}, news: {}
-        }; return this.content; },
-        // Current vocab from wkItemInfo
-        item: null,
-        // Cached to aid in determining whether retries should be done
-        currentUrl: null,
-        // Cache for the number of fetches done for any given url
-        fetchCount: {},
-        // Referenced for quick access to the base node
-        baseEl: null,
-        // Referenced for quick access to the audio node and also to prevent unnecessary recreation of the element
-        audioEls: {},
-        // Referenced so that sentences can be re-rendered after settings change
-        sentencesEl: null,
-        // Reference for quick access to the style sheet
-        styleSheetEl: null,
-        // Container for other ImmersionKit stuff (memoized)
-        get immersionKit() { delete this.immersionKit; this.immersionKit = {
-            api: {
-                1: {
-                    version: 1,
-                    origin: 'https://api.immersionkit.com',
-                    endpoints: {
-                        query: {
-                            pathname: '/look_up_dictionary',
-                            search(keyword, options) {
-                                let {filterExactSearch, exampleLimit, filterJLPTLevel, filterWaniKaniLevel, tags, sentenceSorting} = Object.assign({filterExactSearch:false, exampleLimit:0, filterJLPTLevel:0, filterWaniKaniLevel:false, tags:'', sentenceSorting:'shortness'}, options);
-                                keyword = keyword.replace('〜', ''); // for "counter" kanji
-                                if (filterExactSearch) keyword = `「${keyword}」`;
-                                if (tags?.length > 0) tags = `&tags=${tags}`;
-                                switch (sentenceSorting) {
-                                    case 'shortness':
-                                    case 'longness':
-                                        sentenceSorting = `&sort=${sentenceSorting}`;
-                                        break;
-                                    default:
-                                        sentenceSorting = '';
-                                }
-                                return `?keyword=${keyword}&limit=${exampleLimit}&jlpt=${filterJLPTLevel}&wk=${filterWaniKaniLevel?state.userLevel:0}${tags}${sentenceSorting}`;
-                            },
-                        },
-                    },
-                },
-                2: {
-                    version: 2,
-                    origin: 'https://apiv2.immersionkit.com',
-                    endpoints: {
-                        index: { pathname: '/index_meta' },
-                        query: {
-                            pathname: '/search',
-                            search(keyword, options) {
-                                let {filterExactSearch, exampleLimit, filterJLPTLevel, filterWaniKaniLevel, tags, sentenceSorting} = Object.assign({filterExactSearch:false, exampleLimit:0, filterJLPTLevel:0, filterWaniKaniLevel:false, tags:'', sentenceSorting:'sentence_length:asc'}, options);
-                                keyword = keyword.replace('〜', ''); // for "counter" kanji
-                                if (tags?.length > 0) tags = `&tags=${tags}`;
-                                switch (sentenceSorting) {
-                                    case 'longness':
-                                        sentenceSorting = '&sort=sentence_length:desc';
-                                        break;
-                                    case 'shortness':
-                                        sentenceSorting = '&sort=sentence_length:asc';
-                                        break;
-                                    default:
-                                        sentenceSorting = '';
-                                        break;
-                                }
-                                return `?q=${keyword}&exactMatch=${filterExactSearch?'true':'false'}&limit=${exampleLimit}&jlpt=${filterJLPTLevel}&wk=${filterWaniKaniLevel?state.userLevel:0}${tags}${sentenceSorting}`;
-                            },
-                        },
-                    },
-                },
+        // Whether certain operations are pending to be done.
+        pending: {
+            // Whether an update of the desired shows is pending to be done.
+            updateDesiredShows: false,
+            updateIndexUrl: false,
+            // Whether the current Immersion Kit search URL is pending to be updated.
+            updateSearchUrl: false,
+            // Whether a rerender of the sentences is pending to be done.
+            renderSentences: false,
+        },
+        // Used for modifying the current WK Item Info Injector listeners
+        wkItemInfo: {
+            handlers: {
+                kanji: null,
+                vocabulary: null,
             },
-            cache: {
-                key: `${scriptId}.immersion-kit-data`,
-                // Cached so sentences can be re-rendered after settings change and to persist lookups between sessions
-                urls: {},
-            },
-            baseContentUrl: 'https://us-southeast-1.linodeobjects.com/immersionkit/media/',
-        }; return this.immersionKit;},
+            // Current item from wkItemInfoInjector
+            item: null,
+        },
     };
-    const exampleLimitSearchRegex = new RegExp(`(#${scriptId} \\.example:nth-child)(\\(n\\+\\d+\\))?`), // /(#media-context-sentences \.example:nth-child)(\(n\+\d+\))?/
-        maxHeightSearchRegex = new RegExp(`(#${scriptId}\\s*{[^}]*?max-height:).*?;`), // /(#media-context-sentences\s*{[^}]*?max-height:) *[\d.] *+\w*;/
-        validCssUnitRegex = /^((\d*\.)?\d+)((px)|(em)|(%)|(ex)|(ch)|(rem)|(vw)|(vh)|(vmin)|(vmax)|(cm)|(mm)|(in)|(pt)|(pc))$/i,
-        matchAnyUrlRegex = new RegExp(); // default "empty" regex. Equivalent to `/(?:)/`
+    Object.defineProperties(state, {
+        classNames: {enumerable: true, writable: false, configurable: false},
+        content: {enumerable: true, writable: false, configurable: false},
+        elements: {enumerable: true, writable: false, configurable: false},
+        handlers: {enumerable: false, writable: false, configurable: false},
+        settings: {enumerable: true, writable: false, configurable: true},
+        pending: {enumerable: true, writable: false, configurable: false},
+        wkItemInfo: {enumerable: true, writable: false, configurable: false},
+    });
 
     Promise.resolve().then(async () => await init());
+    // END SCRIPT
 
     async function init() {
         updateKeyMapForTitles();
+        await restoreCachedImmersionKitData();
         const decksIndex = await fetchImmersionKitDecksIndex();
         mergeImmersionKitDeckDataIntoContent(decksIndex);
         if (wkof) {
@@ -433,12 +774,11 @@
             await migrateSettingsVersion();
             await loadSettings();
             addMissingEntriesToContent();
-            await Promise.all([wkof.ready('Apiv2'), addStyle(), onImmersionKitAPIVersionOptionChanged('immersionKitAPIVersion', state.settings.immersionKitAPIVersion)]);
-            await restoreCachedImmersionKitData();
+            await Promise.all([wkof.ready('Apiv2'), addStyle(), onImmersionKitAPIVersionOptionChanged(state.settings.general.advanced.immersionKitAPIVersion)]);
             await updateDesiredShows();
-            wkof.on_pageload(matchAnyUrlRegex, () => wkof.ready('Menu').then(installMenu));
+            wkof.on_pageload(script.regex.anyUrl, () => wkof.ready('Menu').then(installMenu));
         } else {
-            console.warn(`${scriptName}: You are not using Wanikani Open Framework which this script utilizes to provide the settings dialog for the script. You can still use ${scriptName} normally though`);
+            console.warn(`${script.name}: You are not using Wanikani Open Framework which this script utilizes to provide the settings dialog for the script. You can still use ${script.name} normally though`);
             await Promise.all([addStyle(), updateDesiredShows()]);
         }
         window.mediaContextSentences = state;
@@ -446,54 +786,60 @@
     }
 
     function setWaniKaniItemInfoListener() {
-        if (state.wkItemInfoHandler) // TODO: Consider using two handlers to avoid removing removing the entire handler just for Kanji settings changes
-            state.wkItemInfoHandler.remove();
-        state.wkItemInfoHandler = wkItemInfo.forType(`${state.settings.showOnKanji ? 'kanji,' : ''}vocabulary,kanaVocabulary`).under('examples').notify(onExamplesVisible);
+        if (state.wkItemInfo.handlers.vocabulary == null)
+            state.wkItemInfo.handlers.vocabulary = wkItemInfo.forType('vocabulary,kanaVocabulary').under('examples').notify(onExamplesVisible);
+        if (state.settings.general.appearance.showOnKanji) {
+            if (state.wkItemInfo.handlers.kanji == null)
+                state.wkItemInfo.handlers.kanji = wkItemInfo.forType('kanji').under('examples').notify(onExamplesVisible);
+            else
+                state.wkItemInfo.handlers.kanji.renew();
+        }
+        else {
+            state.wkItemInfo.handlers.kanji?.remove();
+            state.wkItemInfo.handlers.kanji = null;
+        }
     }
 
-    // ---------------------------------------------------------------------------------------------------------------- //
-    // -----------------------------------------------MAIN FUNCTIONALITY----------------------------------------------- //
-    // ---------------------------------------------------------------------------------------------------------------- //
-
     async function addContextSentences() {
-        state.baseEl = Object.assign(document.createElement('div'), {id: `${scriptId}-container`});
-        state.sentencesEl = Object.assign(document.createElement('div'), {
-            id: `${scriptId}`,
+        state.elements.base = Object.assign(document.createElement('div'), {id: `${script.id}-container`});
+        state.elements.sentences = Object.assign(document.createElement('div'), {
+            id: `${script.id}`,
             textContent: 'Loading...',
         });
 
-        const titleEl = Object.assign(document.createElement('span'), {textContent: scriptName});
-        const header = [], additionalSettings = {sectionName: scriptName, under: 'examples'};
+        const titleEl = Object.assign(document.createElement('span'), {textContent: script.name});
+        const header = [], additionalSettings = {sectionName: script.name, under: 'examples'};
         header.push(titleEl);
 
         if (wkof) {
             const settingsBtn = Object.assign(document.createElement('span'), {
                 textContent: '⚙️',
-                className: `${scriptId}-settings-btn`,
+                className: `${script.id}-settings-btn`,
                 onclick: openSettings,
             });
             header.push(settingsBtn);
         }
 
-        state.baseEl.append(state.sentencesEl);
+        state.elements.base.append(state.elements.sentences);
 
-        if (state.item.injector)
-            state.item.injector.appendSubsection(header, state.baseEl, additionalSettings);
+        if (state.wkItemInfo.item.injector)
+            state.wkItemInfo.item.injector.appendSubsection(header, state.elements.base, additionalSettings);
 
-        state.currentUrl = getNewImmersionKitUrl(state.item.characters, state.settings);
-        const data = await fetchImmersionKitData();
-        await renderSentences(data);
+        await renderSentences();
     }
 
-    function getNewImmersionKitUrl(keyword, options) {
-        const immersionKit = state.immersionKit.api[state.settings.immersionKitAPIVersion],
-            endpoint = immersionKit.endpoints.query;
-        return `${immersionKit.origin}${endpoint.pathname}${endpoint.search(keyword, options)}`;
+    function getNewImmersionKitUrl(keyword, settings=state.settings) {
+        const immersionKit = state.immersionKit;
+        const api = immersionKit.api[state.settings.general.advanced.immersionKitAPIVersion];
+        const options = immersionKit.getSearchOptions(settings);
+        const url = `${(api.origin)}${api.endpoints.query.pathname}${api.endpoints.query.getSearch(keyword, options)}`;
+        state.pending.updateSearchUrl = false;
+        return url;
     }
 
     async function restoreCachedImmersionKitData() {if (state.immersionKit.cache.key in wkof.file_cache.dir) state.immersionKit.cache.urls = await wkof.file_cache.load(state.immersionKit.cache.key);}
 
-    async function deleteCachedImmersionKitData() {if (state.immersionKit.cache.key in wkof.file_cache.dir) await wkof.file_cache.delete(state.immersionKit.cache.key);}
+    async function deleteCachedImmersionKitData() {if (state.immersionKit.cache.key in wkof.file_cache.dir) await wkof.file_cache.delete(state.immersionKit.cache.key); state.immersionKit.cache.urls = {};}
 
     async function saveCachedImmersionKitData() {await wkof.file_cache.save(state.immersionKit.cache.key, state.immersionKit.cache.urls);}
 
@@ -524,8 +870,8 @@
         for (const category of ['anime', 'drama', 'games', 'literature', 'news']) {
             if (!(category in state.content))
                 state.content[category] = {};
-            if (Object.keys(state.content[category]).length < Object.keys((state.settings.filters.lists)[category]).length) {
-                for (let title of Object.keys((state.settings.filters.lists)[category])) {
+            if (Object.keys(state.content[category]).length < Object.keys(state.settings.filters.lists[category]).length) {
+                for (let title of Object.keys(state.settings.filters.lists[category])) {
                     if (title in state.content[category]) continue;
                     state.content[category][title] = title;
                     state.content.allContent.set(title, {title, category, tags: [], enabled: true});
@@ -536,8 +882,8 @@
                 currentCount = errorList.length;
             }
         }
-        if (state.settings.debugging && errorList.length > 0) {
-            console.warn(`Added ${errorList.length} missing entries to content`, errorList);
+        if (state.settings.general.advanced.debugging && errorList.length > 0) {
+            console.warn(`Added the following ${errorList.length} "missing" entries to content`, errorList);
         }
     }
 
@@ -558,12 +904,12 @@
 
     async function fetchImmersionKitDecksIndex() {
         try {
-            const api = state.immersionKit.api[2];
-            const url = `${api.origin}${api.endpoints.index.pathname}`;
-            let prevModified = state.immersionKit.cache.urls[url]?.lastModified;
-            const response = prevModified ? await fetch(url, {headers: {'If-Modified-Since': prevModified}}) : await fetch(url);
+            const api = state.immersionKit.api['2'];
+            const indexUrl = `${api.origin}${api.endpoints.index.pathname}`;
+            let prevModified = state.immersionKit.cache.urls[indexUrl]?.lastModified;
+            const response = prevModified ? await fetch(indexUrl, {headers: {'If-Modified-Since': prevModified}}) : await fetch(indexUrl);
             if (response.status === 304)
-                return state.immersionKit.cache.urls[url].data; // Return cached data
+                return state.immersionKit.cache.urls[indexUrl].data; // Return cached data
             const json = await response.json();
             const data = json.data;
             let lastModified = response.headers.get('Last-Modified') || json.lastUpdatedTimestamp;
@@ -575,7 +921,8 @@
                     data[key] = value;
                 }
             }
-            state.immersionKit.cache.urls[url] = {data, lastModified};
+            state.immersionKit.cache.urls[indexUrl] = {data, lastModified};
+            state.pending.updateIndexUrl = false;
             return data;
         } catch(e) {
             throw Error('Error fetching Immersion Kit deck list', {cause: e});
@@ -583,46 +930,50 @@
     }
 
     async function fetchImmersionKitData() {
-        const url1 = state.currentUrl ??= getNewImmersionKitUrl(state.item.characters, state.settings);
-        const url2 = getNewImmersionKitUrl(state.item.characters, Object.assign({}, state.settings, {filterExactSearch: !state.settings.filters.exactSearch}));
+        if (state.immersionKit.currentSearchUrl == null) state.immersionKit.currentSearchUrl = getNewImmersionKitUrl(state.wkItemInfo.item.characters);
+        const url1 = state.immersionKit.currentSearchUrl;
+        const url2 = getNewImmersionKitUrl(state.wkItemInfo.item.characters, Object.assign({}, state.settings, {filters: {exactSearch: !state.settings.filters.exactSearch}}));
         let url = url1;
 
         try {
             for (;;) {
-                state.fetchCount[url] ??= 0;
                 if (state.immersionKit.cache.urls[url1] != null) {
+                    if (!state.settings.general.dataFetching.checkLastModified)
+                        return state.immersionKit.cache.urls[url1].data;
                     const lastModified = state.immersionKit.cache.urls[url1].lastModified;
                     const response = await fetch(url1, {headers: {'If-Modified-Since': lastModified}});
                     if (response.status === 304)
                         return state.immersionKit.cache.urls[url1].data; // Return cached data
-                } else if (state.item.type === 'kanji' && state.fetchCount[url1] > 0 && state.immersionKit.cache.urls[url2] != null) {
+                } else if (state.wkItemInfo.item.type === 'kanji' && state.immersionKit.fetchCount[url1] > 0 && state.immersionKit.cache.urls[url2] != null) {
+                    if (!state.settings.general.dataFetching.checkLastModified)
+                        return state.immersionKit.cache.urls[url2].data;
                     const lastModified = state.immersionKit.cache.urls[url2].lastModified;
                     const response = await fetch(url2, {headers: {'If-Modified-Since': lastModified}});
                     if (response.status === 304)
                         return state.immersionKit.cache.urls[url2].data; // Return cached data
                 }
-                state.fetchCount[url]++;
-                state.sentencesEl.textContent = 'Fetching...';
-                if (state.settings.debugging) console.log(`Fetching Immersion Kit data from ${url}`);
+                state.immersionKit.fetchCount[url] = (state.immersionKit.fetchCount[url] ?? 0) + 1;
+                state.elements.sentences.textContent = 'Fetching...';
+                if (state.settings.general.advanced.debugging) console.log(`Fetching Immersion Kit data from ${url}`);
                 const response = await fetch(url),
                     lastModified = response.headers.get('Last-Modified');
                 let data = await response.json();
-                if (state.settings.immersionKitAPIVersion === '1')
+                if (state.settings.general.advanced.immersionKitAPIVersion === '1')
                     data = data.data[0];
                 if (data?.examples?.length > 0) {
                     state.immersionKit.cache.urls[url] = {data, lastModified};
                     await saveCachedImmersionKitData();
                     return data;
-                } else if (state.item.type === 'kanji' && !state.fetchCount[url2]) {
+                } else if (state.wkItemInfo.item.type === 'kanji' && !state.immersionKit.fetchCount[url2]) {
                     url = url2;
                     continue;
-                } else if (state.fetchCount[url] > state.settings.fetchRetryCount)
+                } else if (state.immersionKit.fetchCount[url] > state.settings.general.dataFetching.retryCount)
                     return data;
                 else
                     url = url1;
-                const seconds = Math.round(state.settings.fetchRetryDelay / 100) / 10; // round to nearest first decimal
-                state.sentencesEl.textContent = `Retrying in ${seconds} second${seconds !== 1 ? 's' : ''}`;
-                await sleep(state.settings.fetchRetryDelay);
+                const seconds = Math.round(state.settings.general.dataFetching.retryDelay / 100) / 10; // round to nearest first decimal
+                state.elements.sentences.textContent = `Retrying in ${seconds} second${seconds !== 1 ? 's' : ''}`;
+                await sleep(state.settings.general.dataFetching.retryDelay);
             }
         } catch(e) {
             throw Error('Error fetching Immersion Kit data', {cause: e});
@@ -630,11 +981,11 @@
     }
 
     async function onExamplesVisible(item) {
-        state.item = item; // current vocab item
+        state.wkItemInfo.item = item; // current vocab item
         try {
             await addContextSentences(item);
         } catch(e) {
-            throw Error(`Error while adding ${scriptName} section: ${e.message}`, {cause: e});
+            throw Error(`Error while adding ${script.name} section: ${e.message}`, {cause: e});
         }
     }
 
@@ -687,11 +1038,9 @@
     }
 
     function getItemInfo(item) {
-        const allContent = state.content.allContent;
-        const keyTitleMap = state.content.keyTitleMap;
-        const titleKeyMap = state.content.titleKeyMap;
+        const {allContent, keyTitleMap, titleKeyMap} = state.content;
         let key = null, title = null, category = null;
-        switch (state.settings.immersionKitAPIVersion) {
+        switch (state.settings.general.advanced.immersionKitAPIVersion) {
             case '1':
                 if (titleKeyMap.has(item.deck_name)) {
                     key = titleKeyMap.get(item.deck_name);
@@ -747,7 +1096,7 @@
 
     function setKeywordRegexForItem(item, itemKeyword) {
         const keywordSet = new Set(); // use a set to prevent duplicates from being added.
-        switch (state.settings.immersionKitAPIVersion) {
+        switch (state.settings.general.advanced.immersionKitAPIVersion) {
             case '1':
                 for (let i = 0; i < item.word_index.length; i++)
                     keywordSet.add(item.word_list[item.word_index[i]]);
@@ -758,24 +1107,27 @@
                 break;
         }
         const sentenceKeywords = Array.from(keywordSet);
-        const regexExpression = (sentenceKeywords.length === 0
-            // default to the keyword from the item if word_list is empty
-            ? itemKeyword.split('').join('\\s*') // intersperse whitespace quantifier to match awkwardly spaced out sentences.
-            // use the keywords from the sentence data if they exist properly.
-            : sentenceKeywords.join('|')); // use alternation when using the example's word_list (which will end up creating tags around each "word").
+        // Default to the keyword from the item if word_list is empty,
+        // and intersperse whitespace quantifier to match awkwardly spaced out sentences.
+        // Otherwise, use the keywords from the sentence data if they exist properly
+        // and use alternation when using the example's word_list (which will end up creating tags around each "word").
+        const regexExpression = (sentenceKeywords.length === 0 ? itemKeyword.split('').join('\\s*') : sentenceKeywords.join('|'));
         item.furiganaObject.setKeyword(regexExpression);
     }
 
-    async function renderSentences(data) {
-        // Called from ImmersionKit response and on settings save
-        Object.values(state.audioEls).forEach(el => {el.remove(); el = null;});
-        state.audioEls = {};
+    // Called from Immersion Kit response and on settings save.
+    // This function starts by calling fetchImmersionKitData() to get the data.
+    async function renderSentences() {
+        const data = await fetchImmersionKitData();
+        const {content, elements, immersionKit, settings, wkItemInfo} = state;
+        Object.values(elements.audio).forEach(el => {el.remove(); el = null;});
+        elements.audio = {};
         if (data == null)
-            return state.sentencesEl.textContent = 'Error fetching examples from Immersion Kit.';
+            return (elements.sentences.textContent = 'Error fetching examples from Immersion Kit.');
         const exampleCount = data.examples?.length ?? 0;
         if (exampleCount === 0)
-            return state.sentencesEl.textContent = `${state.settings.fetchRetryCount > 0 ? 'Retry limit reached. ' : ''}No sentences found.`;
-        state.sentencesEl.textContent = 'Loading...';
+            return (elements.sentences.textContent = `${settings.retryCount > 0 ? 'Retry limit reached. ' : ''}No sentences found.`);
+        elements.sentences.textContent = 'Loading...';
         const debugList = new Map();
         const errorList = [];
         const sentencesToDisplay = [];
@@ -783,19 +1135,19 @@
         for (let i = 0; i < exampleCount; i++) {
             const example = data.examples[i];
             const {title} = getItemInfo(example);
-            if (!title || !state.content.allContent.has(title)) {
+            if (!title || !content.allContent.has(title)) {
                 const error = !title ? 'No title' : `No matching title found for "${title}"`;
                 errorList.push({error, index: `${i + 1} of ${exampleCount}:`, example});
                 continue;
             }
-            const matchingEntry = state.content.allContent.get(title);
+            const matchingEntry = content.allContent.get(title);
             const enabled = matchingEntry?.enabled ?? false;
             if (!enabled) {
-                if (state.settings.debugging) debugList.set(title, (debugList.get(title) ?? 0) + 1);
+                if (settings.debugging) debugList.set(title, (debugList.get(title) ?? 0) + 1);
                 continue;
             }
             example.category = matchingEntry.category;
-            const baseUrl = `${state.immersionKit.baseContentUrl}${matchingEntry.category}/${matchingEntry.title}/media/`;
+            const baseUrl = `${immersionKit.baseContentUrl}${matchingEntry.category}/${matchingEntry.title}/media/`;
             // Normalize or create image and sound URLs
             example.image_url = example.image_url || `${baseUrl}${example.image}`;
             example.sound_url = example.sound_url || `${baseUrl}${example.sound}`;
@@ -804,38 +1156,39 @@
             example.sentence = example.sentence.replace(directionalFormattingCharsRegex,'');
             example.sentence_with_furigana = example.sentence_with_furigana.replace(directionalFormattingCharsRegex,'');
             example.furiganaObject = new Furigana(example.sentence, example.sentence_with_furigana);
-            const itemKeyword = state.item.characters.replace('〜', '');
-            if (state.settings.filters.exactMatch && !example.sentence.includes(itemKeyword)) {
-                if (state.settings.debugging) debugList.set(title, (debugList.get(title) ?? 0) + 1);
-                // if (state.settings.debugging) console.log(`Excluded: Title="${title}"; ExactMatch=true`);
+            const itemKeyword = wkItemInfo.item.characters.replace('〜', '');
+            if (settings.filters.exactMatch && !example.sentence.includes(itemKeyword)) {
+                if (settings.debugging) debugList.set(title, (debugList.get(title) ?? 0) + 1);
+                // if (settings.debugging) console.log(`Excluded: Title="${title}"; ExactMatch=true`);
                 continue;
             }
             setKeywordRegexForItem(example, itemKeyword);
             sentencesToDisplay.push(example);
         }
         if (errorList.length > 0) console.warn(`Error(s) found while rendering sentences:`, errorList);
-        if (state.settings.debugging && debugList.size > 0)
+        if (settings.debugging && debugList.size > 0)
             console.log('Currently hidden titles:', debugList);
-        if (sentencesToDisplay.length === 0 || state.settings.failWhenHidden && debugList.size > 0) {
+        if (sentencesToDisplay.length === 0 || settings.failWhenHidden && debugList.size > 0) {
             const deckCountsAsJson = JSON.stringify(data.deck_count, undefined, '\t');
             const preElement = Object.assign(document.createElement('pre'), {
                 innerHTML: `${sentencesToDisplay.length>0 ? sentencesToDisplay.length : 'No'} sentences found for the selected filters (${exampleCount-sentencesToDisplay.length} are available but hidden; see below for details and entry counts).`,
             });
-            if (state.settings.failWhenHidden)
+            if (settings.failWhenHidden)
                 preElement.innerHTML += `<br><br>Currently hidden titles: {<br>\t${Array.from(debugList).map(([title, count]) => `"${title}": ${count}`).join('<br>\t')}<br>}<br>`;
-            preElement.innerHTML += `<br>Complete deck count data: ${deckCountsAsJson}`
-            state.sentencesEl.replaceChildren(preElement);
+            preElement.innerHTML += `<br>Complete deck count data: ${deckCountsAsJson}`;
+            elements.sentences.replaceChildren(preElement);
             return;
         }
 
         const fragment = document.createDocumentFragment();
-        sortSentences(sentencesToDisplay, state.settings.sentenceSorting, state.settings.sentenceSortingSecondary);
+        sortSentences(sentencesToDisplay, settings.sorting.primary, settings.sorting[script.secondarySortingKeyName]);
         for (let i = 0; i < sentencesToDisplay.length; i++) {
             const example = sentencesToDisplay[i];
             const exampleElement = await createExampleElement(example);
             fragment.appendChild(exampleElement);
         }
-        state.sentencesEl.replaceChildren(fragment);
+        elements.sentences.replaceChildren(fragment);
+        state.pending.renderSentences = false;
     }
 
     async function createExampleElement(example) {
@@ -854,7 +1207,7 @@
             }),
             audioButtonEl = Object.assign(document.createElement('button'), {
                 type: 'button',
-                className: 'audio-btn audio-idle',
+                className: `${state.classNames.audioButton} ${state.classNames.audioIdle}`,
                 title: 'Play Audio',
                 textContent: '🔈',
             }),
@@ -865,13 +1218,14 @@
             }),
             enEl = Object.assign(document.createElement('div'), {className: 'en'}),
             enSpanEl = Object.assign(document.createElement('span'), {textContent: example.translation}),
+            // TODO: Perhaps this should be moved to a separate function or the for loop removed
             elements = [
                 {element: jaFuriganaSpanEl,
-                    classListUpdates: [{name: 'showJapanese', value: state.settings.showJapanese}, {name: 'showFurigana', value: state.settings.showFurigana}],
-                    clickListener: {name: 'showFurigana', value: state.settings.showFurigana}},
+                    classListUpdates: [{name: 'showJapanese', value: state.settings.general.appearance.showJapanese}, {name: 'showFurigana', value: state.settings.general.appearance.showFurigana}],
+                    clickListener: {name: 'showFurigana', value: state.settings.general.appearance.showFurigana}},
                 {element: enSpanEl,
-                    classListUpdates: [{name: 'showEnglish', value: state.settings.showEnglish}],
-                    clickListener: {name: 'showEnglish', value: state.settings.showEnglish}},
+                    classListUpdates: [{name: 'showEnglish', value: state.settings.general.appearance.showEnglish}],
+                    clickListener: {name: 'showEnglish', value: state.settings.general.appearance.showEnglish}},
             ],
             promises = [];
         for (const {element, classListUpdates, clickListener} of elements) {
@@ -901,6 +1255,11 @@
     // ----------------------------------------------------HELPERS----------------------------------------------------- //
     // ---------------------------------------------------------------------------------------------------------------- //
 
+    function lazyProperty(obj, prop, value, {enumerable=true, writable=false, configurable=false}={}) {
+        value = typeof value === 'function' ? value.call(obj) : value;
+        return Object.defineProperty(obj, prop, {enumerable, writable, configurable, value})[prop];
+    }
+
     function sortObjectPropertiesInPlace(obj) {
         if (typeof obj !== 'object') return;
         Object.keys(obj).sort().forEach(function(key) {
@@ -914,7 +1273,7 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    function normalize(str){return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replaceAll('×','x').replace(/[^a-z0-9]/gi,'_');} // .replace(/[\s,“”"`'.?!;:()[\]{}\-−/+*=&]/g, '_');}
+    function normalize(str){return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replaceAll('×','x').replace(/[^a-z0-9]/gi,'_');} // .replace(/[\s,“”"`'.?!;:()[\]{}\-−/+*=&]/g, '_')
 
     // Adapted from WKOF Core.js
     // If `currentVersion` is newer than otherVersion, return 1; if `currentVersion` is older than otherVersion, return -1; otherwise, return 0
@@ -929,20 +1288,6 @@
         }
         return 0;
     }
-
-    function isEmptyObject(value) {
-        if (value == null || typeof value !== 'object') return false;
-        const proto = Object.getPrototypeOf(value);
-        // consider `Object.create(null)`, commonly used as a safe map
-        // before `Map` support, an empty object as well as `{}`
-        if (proto !== null && proto !== Object.prototype)
-            return false;
-        for (const prop in value)
-            if (Object.hasOwn(value, prop))
-                return false;
-        return true;
-    }
-
     function arrayValuesEqual(a, b) {
         if (a === b) return true;
         if (a == null || b == null) return false;
@@ -954,68 +1299,30 @@
         return true;
     }
 
-    function updateObjectValuesToValuesFromOtherObjects(object, ...otherObjects) {
-        const keys = Object.keys(object);
-        for (let i = 0; i < otherObjects.length; i++){
-            const obj = otherObjects[i];
-            const values = Array.isArray(obj) ? obj : Object.values(obj);
-            for (let j = 0; j < keys.length && j < values.length; j++) {
-                object[keys[j]] = values[j];
-            }
-        }
-        return object;
-    }
-
-    async function setObjectEntriesEqualToOtherObjectKeys(outputObject, object) {
-        const keys = Object.keys(object);
-        for (let i = 0; i < keys.length; i++) {
-            const key = keys[i];
-            outputObject[key] = key;
-        }
-    }
-
     // ----------------------------------------------ELEMENT MANIPULATION---------------------------------------------- //
 
     function configureAudioElement(element, example) {
-        const idleClassName = 'audio-idle',
-            playingClassName = 'audio-play',
-            onPlay = (event) => {
-                for (const [key, el] of Object.entries(state.audioEls)) {
-                    if (key !== example.id && !el.paused) el.pause();
-                    if (state.settings.restartAudioOnPause) el.currentTime = 0;
-                }
-                element.classList.replace(idleClassName, playingClassName);
-                element.textContent = '🔊';
-            }, onStop = (event) => {
-                element.classList.replace(playingClassName, idleClassName);
-                element.textContent = '🔈';
-                removeAudioElement(event.currentTarget);
-            };
-        element.addEventListener('click', function(e) {
+        element.addEventListener('click', async function(e) {
             e.stopPropagation(); // prevent this click from triggering twice in some scenarios
-            const audioEl = state.audioEls[example.id] = (state.audioEls[example.id] || Object.assign(document.createElement('audio'), {
+            const {elements: {audio, base}, handlers, settings} = state;
+            const id = `audio-button-${example.id}`;
+            const audioEl = audio[id] = (audio[id] || Object.assign(document.createElement('audio'), {
+                id: id,
                 src: example.sound_url,
-                playbackRate: state.settings.playbackRate * 2 / 100,
-                volume: state.settings.playbackVolume / 100,
-                onplay: onPlay,
-                onpause: onStop,
-                onended: onStop,
-                onabort: onStop,
+                playbackRate: settings.general.playback.playbackRate * 2 / 100,
+                volume: settings.general.playback.playbackVolume / 100,
+                onplay: handlers.onPlay,
+                onpause: handlers.onStop,
+                onended: handlers.onStop,
+                onabort: handlers.onStop,
             }));
             if (!audioEl.paused) {
                 audioEl.pause();
                 return;
             }
-            state.baseEl.append(audioEl);
-            audioEl.play()?.catch(() => {});
+            base.append(audioEl);
+            await audioEl.play()?.catch(() => {});
         }, {passive: true});
-    }
-
-    function removeAudioElement(element) {
-        if (element == null) return;
-        // element.src = '';
-        // element.removeAttribute('src');
-        element.remove();
     }
 
     async function updateClassListForSpanElement(element, name, value) {
@@ -1055,7 +1362,7 @@
 
     function onAudioElementClick(event) {
         if (event.target.classList.contains('show-on-click')) return;
-        const button = event.currentTarget.querySelector('.audio-btn');
+        const button = event.currentTarget.getElementsByClassName(state.classNames.audioButton)[0];
         button?.click();
     }
 
@@ -1085,9 +1392,9 @@
     /** Installs the `options` button in the menu */
     function installMenu() {
         const config = {
-            name: scriptId,
+            name: script.id,
             submenu: 'Settings',
-            title: scriptName,
+            title: script.name,
             on_click: openSettings,
         };
         wkof.Menu.insert_script_link(config);
@@ -1095,126 +1402,151 @@
 
     async function loadSettings() {
         try {
-            return mergeSettings(await wkof.Settings.load(scriptId, state.settings));
+            return mergeSettings(await wkof.Settings.load(script.id, state.settings));
         } catch(e) {
             throw Error('Error loading settings from WaniKani Open Framework', {cause: e});
         }
     }
 
+    // Merges the given settings into the state.settings object, using a deep copy and Object.assign() to avoid updating the state.settings object byref.
+    // Returns the updated state.settings object
     function mergeSettings(settings) {
-        // need to use Object.assign() in order to avoid updating the state.settings object byref whenever it is saved
-        return Object.assign(state.settings, structuredClone(settings));
+        return Object.assign(state.settings, window.structuredClone(settings));
     }
 
     // Deletes settings when the current version is older than the last major update
     async function migrateSettingsVersion() {
         const majorUpdateVersion = '4.0.0';
         if (compareVersions(state.settings.version, majorUpdateVersion) >= 0) return;
-        const settingsKey = `wkof.settings.${scriptId}`;
+        const settingsKey = `wkof.settings.${script.id}`;
         await wkof.file_cache.delete(settingsKey);
         await loadSettings();
-        wkof.settings[scriptId].version = scriptVersion;
+        wkof.settings[script.id].version = script.version;
         try {
-            await wkof.Settings.save(scriptId);
+            await wkof.Settings.save(script.id);
         } catch (e) {
             throw Error('Error migrating old settings from WaniKani Open Framework', {cause: e});
         }
     }
 
+    // Called whenever the settings dialog is closed (e.g., Save/Cancel)
+    async function onSettingsClosed(settings) {
+        // Revert any modifications that were unsaved or finalize any that were.
+        const {appearance, playback, dataFetching, advanced} = settings.general;
+        await Promise.all([
+            onAppearanceOptionChanged('showOnKanji', appearance.showOnKanji),
+            onAppearanceOptionChanged('exampleLimit', appearance.exampleLimit),
+            onAppearanceOptionChanged('maxBoxHeight', appearance.maxBoxHeight),
+            onAppearanceOptionChanged('showJapanese', appearance.showJapanese),
+            onAppearanceOptionChanged('showFurigana', appearance.showFurigana),
+            onAppearanceOptionChanged('showEnglish', appearance.showEnglish),
+            onPlaybackOptionChanged('playbackRate', playback.playbackRate),
+            onPlaybackOptionChanged('playbackVolume', playback.playbackVolume),
+            onPlaybackOptionChanged('restartAudioOnPause', playback.restartAudioOnPause),
+            onFetchOptionChanged('retryCount', dataFetching.retryCount),
+            onFetchOptionChanged('retryDelay', dataFetching.retryDelay),
+            onFetchOptionChanged('checkLastModified', dataFetching.checkLastModified),
+            onAdvancedOptionChanged('debugging', advanced.debugging),
+            onAdvancedOptionChanged('failWhenHidden', advanced.failWhenHidden),
+            onAdvancedOptionChanged('immersionKitAPIVersion', advanced.immersionKitAPIVersion),
+        ]);
+    }
+
     // Called when the user clicks the Save button on the Settings dialog.
     async function onSettingsSaved(updatedSettings) {
-        let shouldRerender = false, shouldUpdateShows = false;
+        const {pending} = state;
         const {
             filters: {
-                exactMatch: filterExactMatch,
-                exactSearch: filterExactSearch,
-                jLPTLevel: filterJLPTLevel,
-                waniKaniLevel: filterWaniKaniLevel,
-                lists: {
-                    anime: filterAnime, drama: filterDrama, games: filterGames, literature: filterLiterature, news: filterNews}
+                exactMatch,
+                exactSearch,
+                jlptLevel,
+                waniKaniLevel,
+                // lists: {anime: filterAnime, drama: filterDrama, games: filterGames, literature: filterLiterature, news: filterNews},
             },
-            immersionKitAPIVersion,
-            sentenceSorting,
-            sentenceSortingSecondary,
-            // debugging, // changes handled in onSettingsClosed
-            // restartAudioOnPause, // changes handled in onSettingsClosed
-            // failWhenHidden, // changes handled in onSettingsClosed
-            // highlighting, // Not implemented (TODO)
-            // exampleLimit, // changes handled in onSettingsClosed
-            // fetchRetryCount, // changes handled in onSettingsClosed
-            // fetchRetryDelay, // changes handled in onSettingsClosed
-            // maxBoxHeight, // changes handled in onSettingsClosed
-            // playbackRate, // changes handled in onSettingsClosed
-            // playbackVolume, // changes handled in onSettingsClosed
-            // showEnglish, // changes handled in onSettingsClosed
-            // showFurigana, // changes handled in onSettingsClosed
-            // showJapanese, // changes handled in onSettingsClosed
-            // showOnKanji, // changes handled in onSettingsClosed
+            general: {
+/*                appearance: {
+                    exampleLimit, // changes handled in onSettingsClosed
+                    // highlighting, // Not implemented
+                    // maxBoxHeight, // changes handled in onSettingsClosed
+                    // showEnglish, // changes handled in onSettingsClosed
+                    // showFurigana, // changes handled in onSettingsClosed
+                    // showJapanese, // changes handled in onSettingsClosed
+                    // showOnKanji, // changes handled in onSettingsClosed
+                },*/
+/*                playback: {
+                    restartAudioOnPause, // changes handled in onSettingsClosed
+                    playbackRate, // changes handled in onSettingsClosed
+                    playbackVolume, // changes handled in onSettingsClosed
+                },*/
+/*                dataFetching: {
+                    retryCount, // changes handled in onSettingsClosed
+                    retryDelay, // changes handled in onSettingsClosed
+                },*/
+                advanced: {
+                    // debugging, // changes handled in onSettingsClosed
+                    // failWhenHidden, // changes handled in onSettingsClosed
+                    immersionKitAPIVersion
+                },
+            },
+            sorting: {
+                primary: primarySorting,
+                [script.secondarySortingKeyName]: secondarySorting,
+            },
         } = state.settings;
         const {
-            highlighting: highlightingNew, // Not implemented
             filters: {
-                exactMatch: filterExactMatchNew,
-                exactSearch: filterExactSearchNew,
-                jLPTLevel: filterJLPTLevelNew,
-                waniKaniLevel: filterWaniKaniLevelNew,
-                lists: {anime: filterAnimeNew, drama: filterDramaNew, games: filterGamesNew, literature: filterLiteratureNew, news: filterNewsNew}
+                exactMatch: exactMatchNew,
+                exactSearch: exactSearchNew,
+                jlptLevel: jlptLevelNew,
+                waniKaniLevel: waniKaniLevelNew,
+                // lists: {anime: filterAnimeNew, drama: filterDramaNew, games: filterGamesNew, literature: filterLiteratureNew, news: filterNewsNew}
             },
-            immersionKitAPIVersion: immersionKitAPIVersionNew,
-            sentenceSorting: sentenceSortingNew,
-            sentenceSortingSecondary: sentenceSortingSecondaryNew,
+            general: {
+/*                appearance: {
+                    // exampleLimit: exampleLimitNew,
+                    // highlighting: highlightingNew
+                },*/
+                advanced: {immersionKitAPIVersion: immersionKitAPIVersionNew}},
+            sorting: {
+                primary: primarySortingNew,
+                [script.secondarySortingKeyName]: secondarySortingNew,
+            },
         } = updatedSettings;
-
-        const filterMediaList = Object.assign({}, filterAnime, filterDrama, filterGames, filterLiterature, filterNews);
-        const filterMediaListNew = Object.assign({}, filterAnimeNew, filterDramaNew, filterGamesNew, filterLiteratureNew, filterNewsNew);
-        const filterListsDiffer = !arrayValuesEqual(filterMediaList, filterMediaListNew);
-
-        // avoid many issues by updating the values manually exactly as desired
-        Object.assign(state.settings.filters.lists.anime, filterAnimeNew); // Use Object.assign() to allow persisting old values
-        Object.assign(state.settings.filters.lists.drama, filterDramaNew);
-        Object.assign(state.settings.filters.lists.games, filterGamesNew);
-        Object.assign(state.settings.filters.lists.literature, filterLiteratureNew);
-        Object.assign(state.settings.filters.lists.news, filterNewsNew);
-        state.settings.filters.exactMatch = filterExactMatchNew;
-        state.settings.filters.exactSearch = filterExactSearchNew;
-        state.settings.filters.jLPTLevel = filterJLPTLevelNew;
-        state.settings.filters.waniKaniLevel = filterWaniKaniLevelNew;
-        state.settings.sentenceSorting = sentenceSortingNew;
-        state.settings.sentenceSortingSecondary = sentenceSortingSecondaryNew;
-        state.settings.highlighting = highlightingNew;
-        state.settings.immersionKitAPIVersion = immersionKitAPIVersionNew;
+        for (const listKey of Object.keys(state.settings.filters.lists)) {
+            if (!arrayValuesEqual(state.settings.filters.lists[listKey], updatedSettings.filters.lists[listKey])) {
+                pending.updateDesiredShows = pending.renderSentences = true;
+                break;
+            }
+        }
+        mergeSettings(updatedSettings);
 
         // if (showOnKanji !== showOnKanjiNew) setWaniKaniItemInfoListener(showOnKanjiNew);
-        if (filterExactSearchNew !== filterExactSearch || filterJLPTLevel !== filterJLPTLevelNew || filterWaniKaniLevel !== filterWaniKaniLevelNew) {
+        if (exactSearch !== exactSearchNew || jlptLevel !== jlptLevelNew || waniKaniLevel !== waniKaniLevelNew) {
             // Immersion Kit search options changed
-            state.currentUrl = getNewImmersionKitUrl(state.item.characters, updatedSettings);
-            shouldRerender = true;
+            pending.updateSearchUrl = pending.renderSentences = true;
         }
         if (immersionKitAPIVersion !== immersionKitAPIVersionNew) {
-            await onImmersionKitAPIVersionOptionChanged('immersionKitAPIVersion', immersionKitAPIVersionNew);
-            state.currentUrl = getNewImmersionKitUrl(state.item.characters, updatedSettings);
-            shouldUpdateShows = true;
-            shouldRerender = true;
-        } else if (filterListsDiffer) {
-            shouldUpdateShows = true;
-            shouldRerender = true;
-        } else if (filterExactMatch !== filterExactMatchNew || sentenceSorting !== sentenceSortingNew || sentenceSortingSecondary !== sentenceSortingSecondaryNew) {
-            shouldRerender = true;
+            pending.updateDesiredShows = pending.renderSentences = true;
+        } else if (exactMatch !== exactMatchNew || primarySorting !== primarySortingNew || secondarySorting !== secondarySortingNew) {
+            pending.renderSentences = true;
         }
 
-        if (shouldUpdateShows)
+        if (pending.updateIndexUrl)
+            await fetchImmersionKitDecksIndex();
+        if (pending.updateSearchUrl)
+            state.immersionKit.currentSearchUrl = getNewImmersionKitUrl(state.wkItemInfo.item.characters, updatedSettings);
+        if (pending.updateDesiredShows)
             await updateDesiredShows();
-        if (shouldRerender) {
-            const data = await fetchImmersionKitData();
-            await renderSentences(data);
+        if (pending.renderSentences) {
+            await renderSentences();
         }
     }
 
     function onPrimarySortOptionChanged(name, value) {
         // TODO: This method is a somewhat cursed way of handling this and should be replaced by a natively available method via WKOF if/when I can figure one out.
-        const options = document.getElementById(`${scriptId}_sentenceSortingSecondary`)?.options;
+        const options = document.getElementById(`${script.id}_${script.secondarySortingKeyName}`)?.options;
         if (options === null) return;
-        const keysToHide = state.options.secondarySortingMethodsToHide(value);
+        const keysToHide = state.contentOptions.secondarySortingMethodsToHide(value);
         for (let i = 0; i < options.length; i++) {
             const option = options[i], optionName = option.getAttribute('name');
             const shouldHide = keysToHide.includes(optionName);
@@ -1226,269 +1558,114 @@
 
     function openSettings(e) {
         e.stopPropagation();
-
-        const settingsConfig = {
-            script_id: scriptId, title: scriptName, on_save: onSettingsSaved, on_close: onSettingsClosed,
-            content: {
-                general: {
-                    type: 'page', label: 'General', content: {
-                        generalDescription: {
-                            type: 'section', label: 'Changes to settings in this tab can be previewed in real-time.',
-                        }, appearanceOptions: {
-                            type: 'group', label: 'Appearance Options', content: {
-                                showOnKanji: {
-                                    type: 'checkbox', label: 'Show on Kanji Items',
-                                    default: state.settings.showOnKanji,
-                                    hover_tip: 'Allows the box to appear in the Examples tab for kanji in addition to vocabulary.',
-                                    on_change: onShowOnKanjiOptionChanged,
-                                }, maxBoxHeight: {
-                                    type: 'text', label: 'Box Height', step: 1, min: 0,
-                                    default: state.settings.maxBoxHeight,
-                                    hover_tip: 'Set the maximum height of the container box.\nIf no unit type is provided, px (pixels) is automatically appended.',
-                                    on_change: onMaxBoxHeightOptionChanged, validate: validateMaxHeight,
-                                }, exampleLimit: {
-                                    type: 'number', label: 'Example Limit', step: 1, min: 0,
-                                    default: state.settings.exampleLimit,
-                                    hover_tip: 'Limit the number of entries that may appear.\nSet to 0 to show as many as possible (note that this can really lag the list generation when there are a very large number of matches).',
-                                    on_change: onExampleLimitOptionChanged,
-                                }, showJapanese: {
-                                    type: 'dropdown', label: 'Show Japanese',
-                                    default: state.settings.showJapanese,
-                                    content: state.options.showText,
-                                    hover_tip: 'When to show Japanese text.\nHover enables transcribing a sentences first (play audio by clicking the image to avoid seeing the answer).',
-                                    on_change: onTextShowOptionChanged,
-                                }, showFurigana: {
-                                    type: 'dropdown', label: 'Show Furigana',
-                                    default: state.settings.showFurigana,
-                                    content: state.options.showFurigana,
-                                    hover_tip: 'These have been autogenerated so there may be mistakes.',
-                                    on_change: onTextShowOptionChanged,
-                                }, showEnglish: {
-                                    type: 'dropdown', label: 'Show English',
-                                    default: state.settings.showEnglish,
-                                    content: state.options.showText,
-                                    hover_tip: 'Hover or click allows testing your understanding before seeing the answer.',
-                                    on_change: onTextShowOptionChanged,
-                                },
-                            },
-                        }, playbackOptions: {
-                            type: 'group', label: 'Playback Options', content: {
-                                playbackRate: {
-                                    type: 'input', subtype: 'range', label: 'Playback Speed',
-                                    default: state.settings.playbackRate,
-                                    hover_tip: 'Speed to play back audio. (10% - 200%)',
-                                    on_change: onAudioPlaybackOptionChanged, validate: validatePlaybackRate,
-                                }, playbackVolume: {
-                                    type: 'input', subtype: 'range', label: 'Playback Volume',
-                                    default: state.settings.playbackVolume,
-                                    hover_tip: 'Volume to play back audio. (0% - 100%)',
-                                    on_change: onAudioPlaybackOptionChanged, validate: validatePlaybackVolume,
-                                }, restartAudioOnPause: {
-                                    type: 'checkbox', label: 'Restart Audio on Pause',
-                                    default: state.settings.restartAudioOnPause,
-                                    hover_tip: 'If true, will restart the audio track from the beginning when the user pauses.\nIf false, will save the current position and resume from there the next time that sentence is played.',
-                                    on_change: onToggleOptionChanged,
-                                }
-
-                            },
-                        }, immersionKitDataFetchingOptions: {
-                            type: 'group', label: 'Immersion Kit Data Fetching Options', content: {
-                                fetchRetryCount: {
-                                    type: 'number', label: 'Fetch Retry Count', step: 1, min: 0,
-                                    default: state.settings.fetchRetryCount,
-                                    hover_tip: 'Set how many times you would like to allow retrying the fetch for sentences (to workaround backend issues).',
-                                    on_change: onFetchOptionChanged,
-                                }, fetchRetryDelay: {
-                                    type: 'number', label: 'Fetch Retry Delay (ms)', step: 1, min: 0,
-                                    default: state.settings.fetchRetryDelay,
-                                    hover_tip: 'Set the delay in milliseconds between each retry attempt.',
-                                    on_change: onFetchOptionChanged,
-                                },
-                            },
-                        }, advancedOptions: {
-                            type: 'group', label: 'Advanced Options', content: {
-                                debugging: {
-                                    type: 'checkbox', label: 'Debugging',
-                                    default: state.settings.debugging,
-                                    hover_tip: 'Show additional debugging information in the console.',
-                                    on_change: onToggleOptionChanged,
-                                },
-                                failWhenHidden: {
-                                    type: 'checkbox', label: 'Fail When Hidden',
-                                    default: state.settings.failWhenHidden,
-                                    hover_tip: 'Immediately fail to display the sentences if any are available but hidden, instead showing a message including the list of hidden sentences.\nNote: Toggling this option will immediately cause a rerender of the sentences.',
-                                    on_change: onToggleOptionChanged,
-                                },
-                            },
-                        },
-                    },
-                }, sorting: {
-                    type: 'page', label: 'Sorting', content: {
-                        sentenceSortOptions: {
-                            type: 'group', label: 'Sentence Sorting Options', content: {
-                                sentenceSorting: {
-                                    type: 'dropdown', label: 'Primary Sorting Method',
-                                    default: state.settings.sentenceSorting,
-                                    content: state.options.sortingMethods,
-                                    hover_tip: 'Choose in what order the sentences will be presented.\nDefault = Exactly as retrieved from Immersion Kit',
-                                    on_change: onPrimarySortOptionChanged,
-                                }, sentenceSortingSecondary: {
-                                    type: 'dropdown', label: 'Secondary Sorting Method',
-                                    default: state.settings.sentenceSortingSecondary,
-                                    content: state.options.secondarySortingMethods(state.settings.sentenceSorting),
-                                    hover_tip: 'Choose how you would like to sort equivalencies in the primary sorting method.\nDefault = No secondary sorting',
-                                },
-                            },
-                        },
-                    },
-                }, filters: {
-                    type: 'page', label: 'Filters', content: {
-                        sentenceFilteringOptions: {
-                            type: 'group', label: 'Sentence Filtering Options', content: {
-                                filterExactMatch: {
-                                    type: 'checkbox', label: 'Exact Match',
-                                    default: state.settings.filters.exactMatch,
-                                    hover_tip: 'Text must match term exactly, i.e., this filters out conjugations/inflections.\nChecking this for a word with kanji means it will not match if the sentence has it only in kana form and vice-versa for kana-only vocabulary.\n\nThis filtering is done after the results are retrieved from Immersion Kit and may yield different results than the "Exact Search" option (below) when the latter is not used.',
-                                    path: '@filters.exactMatch',
-                                }, filterAnime: {
-                                    type: 'list', label: 'Anime', multi: true,
-                                    size: 10,
-                                    default: state.content.selections.anime,
-                                    content: state.content.anime,
-                                    hover_tip: 'Select the anime that can be included in the examples.',
-                                    path: '@filters.lists.anime',
-                                }, filterDrama: {
-                                    type: 'list', label: 'Drama', multi: true,
-                                    size: 6,
-                                    default: state.content.selections.drama,
-                                    content: state.content.drama,
-                                    hover_tip: 'Select the dramas that can be included in the examples.',
-                                    path: '@filters.lists.drama',
-                                }, filterGames: {
-                                    type: 'list', label: 'Games', multi: true,
-                                    size: 3,
-                                    default: state.content.selections.games,
-                                    content: state.content.games,
-                                    hover_tip: 'Select the video games that can be included in the examples.',
-                                    path: '@filters.lists.games',
-                                }, filterLiterature: {
-                                    type: 'list', label: 'Literature', multi: true,
-                                    size: 6,
-                                    default: state.content.selections.literature,
-                                    content: state.content.literature,
-                                    hover_tip: 'Select the pieces of literature that can be included in the examples.',
-                                    path: '@filters.lists.literature',
-                                }, filterNews: {
-                                    type: 'list', label: 'News', multi: true,
-                                    size: 6,
-                                    default: state.content.selections.news,
-                                    content: state.content.news,
-                                    hover_tip: 'Select the news sources that can be included in the examples.',
-                                    path: '@filters.lists.news',
-                                },
-                            },
-                        }, immersionKitSearchOptions: {
-                            type: 'group', label: 'Immersion Kit Search Options', content: {
-                                immersionKitSearchDescription: {
-                                    type: 'section', label: 'Changes here cause an API request unless already cached.',
-                                }, filterExactSearch: {
-                                    type: 'checkbox', label: 'Exact Search',
-                                    default: state.settings.filters.exactSearch,
-                                    hover_tip: 'Text must match term exactly, i.e., this filters out conjugations/inflections.\nChecking this for a word with kanji means it will not match if the sentence has it only in kana form and vice-versa for kana-only vocabulary.',
-                                    path: '@filters.exactSearch',
-                                }, filterWaniKaniLevel: {
-                                    type: 'checkbox', label: 'WaniKani Level',
-                                    default: state.settings.filters.waniKaniLevel,
-                                    hover_tip: 'Only show sentences with maximum 1 word outside of your current WaniKani level.',
-                                    path: '@filters.waniKaniLevel',
-                                }, filterJLPTLevel: {
-                                    type: 'dropdown', label: 'JLPT Level',
-                                    default: state.settings.filters.jLPTLevel,
-                                    content: state.options.jlpt,
-                                    hover_tip: 'Only show sentences matching a particular JLPT Level or easier.',
-                                    path: '@filters.jLPTLevel',
-                                }, immersionKitAPIVersion: {
-                                    type: 'dropdown', label: 'Immersion Kit API Version',
-                                    default: state.settings.immersionKitAPIVersion,
-                                    content: state.options.immersionKitAPIVersion,
-                                    hover_tip: 'Select the Immersion Kit API version to use.',
-                                },
-                            },
-                        },
-                    },
-                }, credits: {
-                    type: 'html', label: 'Powered by', html: '<a href="https://www.immersionkit.com" style="vertical-align:middle;vertical-align:-webkit-baseline-middle;vertical-align:-moz-middle-with-baseline;">https://www.immersionkit.com</a>',
-                },
-            },
-        };
-        const dialog = new wkof.Settings(settingsConfig);
-        dialog.open();
+        (new wkof.Settings(state.settingsDialog)).open();
     }
 
-    async function onAudioPlaybackOptionChanged(name, value) {
-        const audioContainer = state.baseEl?.querySelector('audio');
-        if (audioContainer === null) return;
+    async function onAppearanceOptionChanged(name, value) {
+        if (value === state.settings.general.appearance[name]) return;
+        state.settings.general.appearance[name] = value;
+        let selector;
         switch (name) {
-            case 'playbackRate':
-                if (value === state.settings.playbackRate) return;
-                state.settings.playbackRate = value;
-                audioContainer.playbackRate = value * 2 / 100;
-                break;
-            case 'playbackVolume':
-                if (value === state.settings.playbackVolume) return;
-                state.settings.playbackVolume = value;
-                audioContainer.volume = value / 100;
-                break;
-        }
-    }
-
-    async function onExampleLimitOptionChanged(name, value) {
-        if (value === state.settings[name]) return;
-        // Adjust the example limit with CSS to avoid recreating the list
-        const replacement = value===0 ? '$1' : `$1(n+${value+1})`;
-        state.settings.exampleLimit = value;
-        state.styleSheetEl.innerHTML = state.styleSheetEl.innerHTML.replace(exampleLimitSearchRegex,replacement);
-    }
-
-    async function onFetchOptionChanged(name, value) {
-        let prevRetryCount;
-        switch (name) {
-            case 'fetchRetryCount':
-                // TODO: Possibly make this not affect the fetch count when the dialog was canceled instead of saved
-                if (value === state.settings.fetchRetryCount) return;
-                prevRetryCount = state.settings.fetchRetryCount;
-                state.settings.fetchRetryCount = value;
-                if (state.sentencesEl.childElementCount === 0 && value > prevRetryCount && value >= (state.fetchCount[state.currentUrl] ?? 0)) {
-                    const data = await fetchImmersionKitData();
-                    await renderSentences(data);
+            case 'exampleLimit': {
+                // Adjust the example limit with CSS to avoid recreating the list
+                const replacement = Number(value) === 0 ? '$1' : `$1(n+${value + 1})`;
+                state.elements.styleSheet.innerHTML = state.elements.styleSheet.innerHTML.replace(script.regex.exampleLimitSearch, replacement);
+                state.pending.updateSearchUrl = state.pending.renderSentences = true;
+                return;
+            }
+            case 'maxBoxHeight': {
+                if (!Number.isNaN(Number(value))) {
+                    value += 'px';
+                    state.settings.general.appearance[name] = wkof.settings[script.id].general.appearance.maxBoxHeight = value;
                 }
+                const replacement = `$1 ${value};`;
+                state.elements.styleSheet.innerHTML = state.elements.styleSheet.innerHTML.replace(script.regex.maxHeightSearch, replacement);
+                return;
+            }
+            case 'showOnKanji':
+                setWaniKaniItemInfoListener();
+                return;
+            case 'showEnglish':
+                selector = '.example-text .en > span';
                 break;
-            case 'fetchRetryDelay':
-                if (value === state.settings.fetchRetryDelay) return;
-                state.settings.fetchRetryDelay = value;
+            case 'showFurigana':
+            case 'showJapanese':
+                selector = '.example-text .ja > span';
                 break;
+            default:
+                return;
         }
+        // On reached for the text displaying options
+        const exampleEls = state.elements.sentences.querySelectorAll(selector);
+        const promises = [];
+        for (let i = 0; i < exampleEls.length; i++) {
+            const el = exampleEls[i];
+            promises.push(updateClassListForSpanElement(el, name, value));
+            promises.push(updateOnClickListenerForSpanElement(el, name, value));
+        }
+        await Promise.all(promises);
     }
 
-    async function onToggleOptionChanged(name, value) {
-        if (value === state.settings[name]) return;
-        state.settings[name] = value;
+    async function onAdvancedOptionChanged(name, value) {
+        if (value === state.settings.general.advanced[name]) return;
+        state.settings.general.advanced[name] = value;
         switch (name) {
             case 'debugging':
                 break;
             case 'failWhenHidden':
-                const data = await fetchImmersionKitData();
-                await renderSentences(data);
+                await renderSentences();
+                break;
+            case 'immersionKitAPIVersion':
+                await onImmersionKitAPIVersionOptionChanged(value);
+                break;
+        }
+    }
+
+    // Called by any setting listener to verify the setting is different from the existing value
+    async function onPlaybackOptionChanged(name, value) {
+        if (value === state.settings.general.playback[name]) return;
+        state.settings.general.playback[name] = value;
+        const audioContainer = state.elements.base?.querySelector('audio');
+        if (audioContainer === null) return;
+        switch (name) {
+            case 'playbackRate':
+                audioContainer.playbackRate = value * 2 / 100;
+                break;
+            case 'playbackVolume':
+                audioContainer.volume = value / 100;
                 break;
             case 'restartAudioOnPause':
                 break;
         }
     }
 
-    async function onImmersionKitAPIVersionOptionChanged(name, value) {
-        // if (value === state.settings[name]) return;
-        // state.settings[name] = value;
+    async function onFetchOptionChanged(name, value) {
+        if (value === state.settings.general.dataFetching[name]) return;
+        let prevRetryCount = state.settings.general.dataFetching.retryCount;
+        state.settings.general.dataFetching[name] = value;
+        switch (name) {
+            case 'retryCount':
+                // TODO: Possibly make this not affect the fetch count when the dialog was canceled instead of saved
+                if (state.elements.sentences.childElementCount === 0 && value > prevRetryCount && value >= (state.immersionKit.fetchCount[state.immersionKit.currentSearchUrl] ?? 0))
+                    await renderSentences();
+                break;
+            case 'retryDelay':
+            case 'checkLastModified':
+                break;
+        }
+    }
+
+    // Called when the flush cached data button is clicked
+    async function onFlushCachedDataClicked(name, value, on_change) {
+        await deleteCachedImmersionKitData();
+        if (state.settings.general.advanced.debugging) console.log('Immersion Kit data has been deleted.');
+        state.pending.updateIndexUrl = state.pending.updateSearchUrl = state.pending.updateDesiredShows = state.pending.renderSentences = true;
+        await on_change();
+    }
+
+    async function onImmersionKitAPIVersionOptionChanged(value) {
         let title;
+        // Hardcoded the values that need to be swapped based on the API as of version 4.0.0 of this script
         switch (value) {
             case '1':
                 for (const title of ['Good Morning Call Season 1', 'Good Morning Call Season 2'])
@@ -1512,71 +1689,7 @@
                 return;
         }
         updateKeyMapForTitles();
-    }
-
-    async function onMaxBoxHeightOptionChanged(name, value) {
-        if (value === state.settings[name]) return;
-        if (!Number.isNaN(Number(value))) {
-            value += 'px';
-            state.settings.maxBoxHeight = wkof.settings[scriptId].maxBoxHeight = value;
-        }
-        const replacement = `$1 ${value};`;
-        state.styleSheetEl.innerHTML = state.styleSheetEl.innerHTML.replace(maxHeightSearchRegex,replacement);
-    }
-
-    async function onShowOnKanjiOptionChanged(name, value) {
-        if (value === state.settings[name]) return;
-        state.settings.showOnKanji = value;
-        setWaniKaniItemInfoListener();
-    }
-
-    async function onSettingsClosed(settings) {
-        // Revert any modifications that were unsaved or finalize any that were.
-        await Promise.all([
-            onShowOnKanjiOptionChanged('showOnKanji', settings.showOnKanji),
-            onAudioPlaybackOptionChanged('playbackRate', settings.playbackRate),
-            onAudioPlaybackOptionChanged('playbackVolume', settings.playbackVolume),
-            onExampleLimitOptionChanged('exampleLimit', settings.exampleLimit),
-            onFetchOptionChanged('fetchRetryCount', settings.fetchRetryCount),
-            onFetchOptionChanged('fetchRetryDelay', settings.fetchRetryDelay),
-            onMaxBoxHeightOptionChanged('maxBoxHeight', settings.maxBoxHeight),
-            onTextShowOptionChanged('showJapanese', settings.showJapanese),
-            onTextShowOptionChanged('showFurigana', settings.showFurigana),
-            onTextShowOptionChanged('showEnglish', settings.showEnglish),
-            onToggleOptionChanged('debugging', settings.debugging),
-            onToggleOptionChanged('failWhenHidden', settings.failWhenHidden),
-            onToggleOptionChanged('restartAudioOnPause', settings.restartAudioOnPause),
-        ]);
-    }
-
-    async function onTextShowOptionChanged(name, value) {
-        let selector;
-        switch (name) {
-            case 'showEnglish':
-                if (value === state.settings.showEnglish) return;
-                state.settings.showEnglish = value;
-                selector = '.example-text .en > span';
-                break;
-            case 'showFurigana':
-                if (value === state.settings.showFurigana) return;
-                state.settings.showFurigana = value;
-            // fallthrough
-            case 'showJapanese':
-                if (value === state.settings.showJapanese) return;
-                state.settings.showJapanese = value;
-                selector = '.example-text .ja > span';
-                break;
-            default:
-                return;
-        }
-        const exampleEls = state.sentencesEl.querySelectorAll(selector);
-        const promises = [];
-        for (let i = 0; i < exampleEls.length; i++) {
-            const el = exampleEls[i];
-            promises.push(updateClassListForSpanElement(el, name, value));
-            promises.push(updateOnClickListenerForSpanElement(el, name, value));
-        }
-        await Promise.all(promises);
+        state.pending.updateSearchUrl = state.pending.updateDesiredShows = state.pending.renderSentences = true;
     }
 
     async function updateDesiredShows() {
@@ -1603,10 +1716,11 @@
         }
         if (errors.length > 0)
             console.debug(`Error(s) found during updateDesiredShows:`, errors);
+        state.pending.updateDesiredShows = false;
     }
 
     function validateMaxHeight(value) {
-        return value === undefined || value === null || value === '' || validCssUnitRegex.test(value) || 'Number and (optional) valid unit type only';
+        return value === undefined || value === null || value === '' || script.regex.validCssUnit.test(value) || 'Number and (optional) valid unit type only';
     }
 
     function validatePlaybackRate(value) {
@@ -1622,37 +1736,41 @@
     // ---------------------------------------------------------------------------------------------------------------- //
 
     async function addStyle() {
-        if (document.getElementById(styleSheetName)) return;
-        state.styleSheetEl = Object.assign(document.createElement('style'), {
-            id: styleSheetName,
+        if (document.getElementById(script.styleSheetName)) return;
+        const {classNames:{audioIdle, audioButton}, elements, settings:{general:{appearance:{maxBoxHeight, exampleLimit}}}} = state;
+        elements.styleSheet = Object.assign(document.createElement('style'), {
+            id: script.styleSheetName,
             type: 'text/css',
             // language=CSS
             textContent: `
-            #${scriptId} { max-height: ${state.settings.maxBoxHeight}; overflow-y: auto; }
-            #${scriptId} .example:nth-child${state.settings.exampleLimit===0?'':`(n+${state.settings.exampleLimit+1})`} { display: none; }
-            .${scriptId}-settings-btn { font-size: 14px; cursor: pointer; vertical-align: middle; margin-left: 10px; }
-            #${scriptId}-container { border: none; font-size: 100%; }
-            #${scriptId} pre { white-space: pre-wrap; white-space: -moz-pre-wrap; white-space: -pre-wrap; white-space: -o-pre-wrap; word-wrap: break-word; }
-            #${scriptId} .example { display: flex; align-items: center; margin-bottom: 1em; cursor: pointer; }
-            #${scriptId} .example > * { flex-grow: 1; flex-shrink: 1; flex-basis: min-content; }
-            #${scriptId} .example img { padding-right: 1em; max-width: 200px; }
-            #${scriptId} .example .audio-btn { background-color: transparent; margin-left: 0.25em; }
-            #${scriptId} .example .audio-btn.audio-idle { opacity: 50%; }
-            #${scriptId} .example-text { display: table; white-space: normal; }
-            #${scriptId} .example-text .title { font-weight: var(--font-weight-bold); }
-            #${scriptId} .example-text .ja { font-size: var(--font-size-xlarge); }
+            #${script.id}_dialog button { background-color: #555555; border: 2px solid #555555; color: white; padding: 0 10px; text-align: center; text-decoration: none; display: inline-block; margin: 0 2px; transition-duration: 0.1s; cursor: pointer; }
+            #${script.id}_dialog button:hover { background-color: gray; }
+            #${script.id}_dialog button:active { background-color: gray; transform: translate(0, 3px); }
+            #${script.id} { max-height: ${maxBoxHeight}; overflow-y: auto; }
+            #${script.id} .example:nth-child${exampleLimit===0?'':`(n+${exampleLimit+1})`} { display: none; }
+            .${script.id}-settings-btn { font-size: 14px; cursor: pointer; vertical-align: middle; margin-left: 10px; }
+            #${script.id}-container { border: none; font-size: 100%; }
+            #${script.id} pre { white-space: pre-wrap; white-space: -moz-pre-wrap; white-space: -pre-wrap; white-space: -o-pre-wrap; word-wrap: break-word; }
+            #${script.id} .example { display: flex; align-items: center; margin-bottom: 1em; cursor: pointer; }
+            #${script.id} .example > * { flex-grow: 1; flex-shrink: 1; flex-basis: min-content; }
+            #${script.id} .example img { padding-right: 1em; max-width: 200px; }
+            #${script.id} .example .${audioButton} { background-color: transparent; margin-left: 0.25em; }
+            #${script.id} .example .${audioButton}.${audioIdle} { opacity: 50%; }
+            #${script.id} .example-text { display: table; white-space: normal; }
+            #${script.id} .example-text .title { font-weight: var(--font-weight-bold); }
+            #${script.id} .example-text .ja { font-size: var(--font-size-xlarge); }
             /* Set the default and on-hover appearance */
-            #${scriptId} .show-on-hover:hover, #${scriptId} .show-ruby-on-hover:hover ruby rt { background-color: inherit; color: inherit; visibility: visible; }
+            #${script.id} .show-on-hover:hover, #${script.id} .show-ruby-on-hover:hover ruby rt { background-color: inherit; color: inherit; visibility: visible; }
             /* Set the color/appearance of the marked keyword */
-            #${scriptId} mark, #${scriptId} .show-on-hover:hover mark { background-color: inherit; color: darkcyan; }
+            #${script.id} mark, #${script.id} .show-on-hover:hover mark { background-color: inherit; color: darkcyan; }
             /* Set the appearance for show-on-hover and show-on-click elements when trigger state is inactive */
-            #${scriptId} .show-on-hover, #${scriptId} .show-on-hover mark, #${scriptId} .show-on-click, #${scriptId} .show-on-click mark { background-color: #ccc; color: transparent; text-shadow: none; }
+            #${script.id} .show-on-hover, #${script.id} .show-on-hover mark, #${script.id} .show-on-click, #${script.id} .show-on-click mark { background-color: #ccc; color: transparent; text-shadow: none; }
             /* Set the appearance for hidden and show-ruby-on-hover elements when trigger state is inactive */
-            #${scriptId} .show-ruby-on-hover ruby rt { visibility: hidden; }
-            #${scriptId} .hide, #${scriptId} .hide-ruby ruby rt { display: none; }
+            #${script.id} .show-ruby-on-hover ruby rt { visibility: hidden; }
+            #${script.id} .hide, #${script.id} .hide-ruby ruby rt { display: none; }
             `.replaceAll(/(\n|^ {2,})/mg, ''),
         });
-        document.getElementsByTagName('head')[0].append(state.styleSheetEl);
+        document.getElementsByTagName('head')[0].append(elements.styleSheet);
     }
 
     // ---------------------------------------------------------------------------------------------------------------- //
@@ -1690,7 +1808,7 @@
     Furigana.prototype.getFirstKeywordIndex = function() {
         if (this.keyword === null) return -1;
         if (this.firstKeywordIndex !== null) return this.firstKeywordIndex;
-        return this.firstKeywordIndex = this.expression.search(this.keywordRegex);
+        return (this.firstKeywordIndex = this.expression.search(this.keywordRegex));
     };
 
     Furigana.prototype.parseFurigana = function(expressionWithFurigana) {
