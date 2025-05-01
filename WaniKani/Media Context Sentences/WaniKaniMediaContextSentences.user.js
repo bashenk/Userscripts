@@ -557,7 +557,7 @@
                                 restartAudioOnPause: {
                                     type: 'checkbox', label: 'Restart Audio on Pause',
                                     default: state.settings.general.playback.restartAudioOnPause,
-                                    hover_tip: 'If true, will restart the audio track from the beginning when the user pauses.\nIf false, will save the current position and resume from there the next time that sentence is played.',
+                                    hover_tip: 'If true, will restart the audio track from the beginning whenever a sentence is played.\nIf false, will save the current position and resume from there the next time that sentence is played.',
                                     on_change: onPlaybackOptionChanged,
                                     path: '@general.playback.restartAudioOnPause',
                                 }
