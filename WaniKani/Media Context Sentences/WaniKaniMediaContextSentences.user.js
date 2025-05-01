@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Media Context Sentences
 // @description  Formerly named "Wanikani Anime Sentences 2". Adds example sentences from anime, dramas, games, literature, and news for vocabulary from https://www.immersionkit.com.
-// @version      4.0.3
+// @version      4.0.4
 // @author       Inserio
 // @namespace    https://greasyfork.org/en/users/11878
 // @match        https://www.wanikani.com/*
@@ -23,7 +23,7 @@
         id: 'media-context-sentences',
         name: 'Media Context Sentences',
         secondarySortingKeyName: 'secondary',
-        version: '4.0.3'
+        version: '4.0.4'
     };
     script.styleSheetName = `${script.id}-style`;
     script.regex = {
@@ -145,9 +145,9 @@
                                     case 'longness':
                                         sentenceSorting = `&sort=${sentenceSorting}`;
                                 }
-                                const jlpt = `&jlpt=${jlptLevel}`;
-                                const wk = `&wk=${waniKaniLevel ? state.userLevel : 0}`;
-                                const tag = `${tags.length > 0 ? `&tags=${tags}` : ''}`;
+                                const jlpt = Number(jlptLevel) > 0 ? `&jlpt=${jlptLevel}` : '';
+                                const wk = waniKaniLevel ? `&wk=${state.userLevel}` : '';
+                                const tag = tags.length > 0 ? `&tags=${tags}` : '';
                                 const limit = Number(exampleLimit) > 0 ? `&limit=${exampleLimit}` : '';
                                 return `?keyword=${keyword}${jlpt}${wk}${tag}${sentenceSorting}${limit}`;
                             },
@@ -170,10 +170,10 @@
                                         sentenceSorting = '&sort=sentence_length:asc';
                                         break;
                                 }
-                                const exact = `&exactMatch=${exactSearch ? 'true' : 'false'}`;
-                                const jlpt = `&jlpt=${jlptLevel}`;
-                                const wk = `&wk=${waniKaniLevel ? state.userLevel : 0}`;
-                                const tag = `${tags.length > 0 ? `&tags=${tags}` : ''}`;
+                                const exact = exactSearch ? '&exactMatch=true' : '';
+                                const jlpt = Number(jlptLevel) > 0 ? `&jlpt=${jlptLevel}` : '';
+                                const wk = waniKaniLevel ? `&wk=${state.userLevel}` : '';
+                                const tag = tags.length > 0 ? `&tags=${tags}` : '';
                                 return `?q=${keyword}${exact}${jlpt}${wk}${tag}${sentenceSorting}`;
                             },
                         },
@@ -772,8 +772,8 @@
             // document.documentElement.addEventListener('turbo:load', () => setTimeout(() => wkof.ready('Menu').then(installMenu), 0));
             await wkof.ready('Settings');
             // await createContentListsForSettings();
-            await migrateSettingsVersion();
             await loadSettings();
+            await migrateSettingsVersion();
             addMissingEntriesToContent();
             await Promise.all([wkof.ready('Apiv2'), addStyle(), onImmersionKitAPIVersionOptionChanged(state.settings.general.advanced.immersionKitAPIVersion)]);
             await updateDesiredShows();
@@ -1422,8 +1422,12 @@
     async function migrateSettingsVersion() {
         const majorUpdateVersion = '4.0.0';
         if (compareVersions(state.settings.version, majorUpdateVersion) >= 0) return;
+        if (state.settings.general.advanced.debugging)
+            console.log(`Migrating settings from ${state.settings.version} to ${majorUpdateVersion}`);
         const settingsKey = `wkof.settings.${script.id}`;
-        await wkof.file_cache.delete(settingsKey);
+        if (settingsKey in wkof.file_cache.dir)
+            await wkof.file_cache.delete(settingsKey);
+        await deleteCachedImmersionKitData();
         await loadSettings();
         wkof.settings[script.id].version = script.version;
         try {
