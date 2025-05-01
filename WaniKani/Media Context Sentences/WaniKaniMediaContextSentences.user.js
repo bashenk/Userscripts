@@ -157,7 +157,7 @@
                         index: {pathname: '/index_meta'},
                         query: {
                             pathname: '/search',
-                            getSearch(keyword, {exactSearch, exampleLimit, jlptLevel, primarySorting, tags, waniKaniLevel}) {
+                            getSearch(keyword, {exactSearch, jlptLevel, primarySorting, tags, waniKaniLevel}) {
                                 keyword = keyword.replace('〜', ''); // for "counter" kanji
                                 let sentenceSorting = '';
                                 switch (primarySorting) {
@@ -172,8 +172,7 @@
                                 const jlpt = `&jlpt=${jlptLevel}`;
                                 const wk = `&wk=${waniKaniLevel ? state.userLevel : 0}`;
                                 const tag = `${tags.length > 0 ? `&tags=${tags}` : ''}`;
-                                const limit = Number(exampleLimit) > 0 ? `&limit=${exampleLimit}` : '';
-                                return `?q=${keyword}${exact}${jlpt}${wk}${tag}${sentenceSorting}${limit}`;
+                                return `?q=${keyword}${exact}${jlpt}${wk}${tag}${sentenceSorting}`;
                             },
                         },
                     },
